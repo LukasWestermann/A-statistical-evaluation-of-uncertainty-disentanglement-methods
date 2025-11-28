@@ -1,0 +1,37 @@
+name: uncertainty-disentanglement
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10,<3.12
+  - numpy>=1.24.0
+  - scipy>=1.10.0
+  - pandas>=2.0.0
+  - matplotlib>=3.7.0
+  - seaborn>=0.12.0
+  - jupyter>=1.0.0
+  - ipykernel>=6.25.0
+  - notebook>=6.5.0
+  - h5py>=3.9.0
+  - tqdm>=4.65.0
+  - joblib>=1.3.0
+  - pip
+  - pip:
+    - statsmodels>=0.14.0
+    - scikit-learn>=1.3.0
+    - scikit-posthocs>=0.7.0
+    - plotly>=5.15.0
+    - pingouin>=0.5.3
+    - lifelines>=0.27.0
+    - torch>=2.0.0
+    - tensorflow>=2.13.0
+    - keras>=2.13.0
+    - openpyxl>=3.1.0
+    - xlsxwriter>=3.1.0
+    - cvxpy>=1.3.0
+    - scikit-optimize>=0.9.0
+    - arch>=5.3.0
+    - pmdarima>=2.0.0
+    - pymc>=5.3.0
+    - arviz>=0.15.0
+
