@@ -1,7 +1,42 @@
 ## Utility functions for saving results
 import pandas as pd
 import matplotlib.pyplot as plt
+from pathlib import Path
+import os
 
+# Module-level variables for directories (can be set by notebooks)
+plots_dir = None
+stats_dir = None
+
+def _get_default_dirs():
+    """Get default directories based on project structure"""
+    # Try to find project root (look for results directory)
+    current = Path.cwd()
+    
+    # If we're in Experiments folder, go up one level
+    if current.name == 'Experiments':
+        project_root = current.parent
+    else:
+        project_root = current
+    
+    # Look for results directory
+    results_base = project_root / "results"
+    if results_base.exists():
+        # Try to find sample_size or use a default
+        for subdir in results_base.iterdir():
+            if subdir.is_dir():
+                plots = subdir / "plots"
+                stats = subdir / "statistics"
+                if plots.exists() or stats.exists():
+                    return plots if plots.exists() else subdir / "plots", \
+                           stats if stats.exists() else subdir / "statistics"
+        
+        # Default to sample_size if it exists or create generic
+        default_subdir = results_base / "sample_size"
+        return default_subdir / "plots", default_subdir / "statistics"
+    
+    # Fallback: create in current directory
+    return Path("results") / "plots", Path("results") / "statistics"
 
 def sanitize_filename(name):
     """Convert a string to a valid filename"""
@@ -15,11 +50,16 @@ def sanitize_filename(name):
 
 def save_plot(fig, filename, subfolder=''):
     """Save a matplotlib figure to the results/plots directory"""
+    global plots_dir
+    if plots_dir is None:
+        plots_dir, _ = _get_default_dirs()
+    
     if subfolder:
         save_dir = plots_dir / subfolder
         save_dir.mkdir(parents=True, exist_ok=True)
     else:
         save_dir = plots_dir
+        save_dir.mkdir(parents=True, exist_ok=True)
     
     filepath = save_dir / f"{sanitize_filename(filename)}.png"
     fig.savefig(filepath, dpi=300, bbox_inches='tight')
@@ -28,11 +68,16 @@ def save_plot(fig, filename, subfolder=''):
 
 def save_statistics(data_dict, filename, subfolder='', save_excel=True):
     """Save statistics dictionary to CSV and optionally Excel"""
+    global stats_dir
+    if stats_dir is None:
+        _, stats_dir = _get_default_dirs()
+    
     if subfolder:
         save_dir = stats_dir / subfolder
         save_dir.mkdir(parents=True, exist_ok=True)
     else:
         save_dir = stats_dir
+        save_dir.mkdir(parents=True, exist_ok=True)
     
     # Convert to DataFrame if it's a dict
     if isinstance(data_dict, dict):
@@ -61,11 +106,16 @@ def save_statistics(data_dict, filename, subfolder='', save_excel=True):
 
 def save_summary_text(text, filename, subfolder=''):
     """Save summary text to a file"""
+    global stats_dir
+    if stats_dir is None:
+        _, stats_dir = _get_default_dirs()
+    
     if subfolder:
         save_dir = stats_dir / subfolder
         save_dir.mkdir(parents=True, exist_ok=True)
     else:
         save_dir = stats_dir
+        save_dir.mkdir(parents=True, exist_ok=True)
     
     filepath = save_dir / f"{sanitize_filename(filename)}.txt"
     with open(filepath, 'w', encoding='utf-8') as f:

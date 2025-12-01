@@ -9,7 +9,7 @@ from torch.utils.data import TensorDataset, DataLoader
 # Paper settings: MC-Dropout p=0.25, M=20 forward passes, NLL and β-NLL (β=0.5)
 # Architecture from Appendix: two hidden layers (32 units, ReLU) + Dropout; μ head (Linear), σ head (Softplus)
 # Training config: 700 epochs, batch size 32, Adam lr=1e-3
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 # ----- Model per Appendix B (Regression) -----

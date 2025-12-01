@@ -1,3 +1,8 @@
+import matplotlib.pyplot as plt
+import numpy as np
+from utils.results_save import save_plot
+
+
 def plot_toy_data(x_train, y_train, x_grid, y_clean, title="Toy Regression Data", save_plot_file=True):
     """Plot the training data and clean function"""
     fig = plt.figure(figsize=(12, 6))
