@@ -4,12 +4,19 @@ import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
+import sys
+from pathlib import Path
 
+# Add parent directory to path to import utils
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from utils.device import get_device
 
 # Paper settings: MC-Dropout p=0.25, M=20 forward passes, NLL and β-NLL (β=0.5)
 # Architecture from Appendix: two hidden layers (32 units, ReLU) + Dropout; μ head (Linear), σ head (Softplus)
 # Training config: 700 epochs, batch size 32, Adam lr=1e-3
-#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = get_device()
 
 
 # ----- Model per Appendix B (Regression) -----
@@ -48,7 +55,9 @@ def beta_nll(y, mu, var, beta=0.5):
     return weight * gaussian_nll(y, mu, var)
 
 # ----- Training loop -----
-def train_model(model, loader, epochs=700, lr=1e-3, loss_type='nll', beta=0.5):
+def train_model(model, loader, epochs=700, lr=1e-3, loss_type='nll', beta=0.5, device=None):
+    if device is None:
+        device = get_device()
     model.to(device)
     opt = optim.Adam(model.parameters(), lr=lr)
 
@@ -109,8 +118,11 @@ def normalize_x_data(x, x_mean, x_std):
         return (x - x_mean) / x_std
 
 # ----- MC-Dropout sampling and uncertainty decomposition -----
-def mc_dropout_predict(model, x, M=20):
+def mc_dropout_predict(model, x, M=20, device=None):
     # Keep dropout active at inference by using train() but without gradients
+    if device is None:
+        device = get_device()
+    model.to(device)
     model.train()
     x_t = torch.from_numpy(x).to(device)
     mus = []

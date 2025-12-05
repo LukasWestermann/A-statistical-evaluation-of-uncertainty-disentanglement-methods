@@ -43,6 +43,7 @@ pmdarima>=2.0.0
 # Bayesian statistics
 pymc>=5.3.0
 arviz>=0.15.0
+pyro-ppl>=1.8.0
 
 # Additional utilities
 tqdm>=4.65.0

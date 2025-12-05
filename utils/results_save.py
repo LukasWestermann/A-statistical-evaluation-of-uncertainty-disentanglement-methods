@@ -125,8 +125,19 @@ def save_summary_text(text, filename, subfolder=''):
 
 def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list, 
                            avg_tot_norm_list, correlation_list, function_name, 
-                           noise_type='heteroscedastic', func_type=''):
+                           noise_type='heteroscedastic', func_type='', model_name=''):
     """Helper function to save summary statistics and create summary plot
+    
+    Args:
+        percentages: List of training data percentages
+        avg_ale_norm_list: List of normalized average aleatoric uncertainties
+        avg_epi_norm_list: List of normalized average epistemic uncertainties
+        avg_tot_norm_list: List of normalized average total uncertainties
+        correlation_list: List of correlations between epistemic and aleatoric uncertainties
+        function_name: Name of the function (e.g., 'Linear', 'Sinusoidal')
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        func_type: Function type identifier (e.g., 'linear', 'sin')
+        model_name: Name of the model (e.g., 'MC_Dropout', 'Deep_Ensemble') - optional
     
     Returns:
         tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
@@ -140,12 +151,22 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
         'Correlation_Epi_Ale': correlation_list
     })
     
+    # Build filename with optional model prefix
+    base_filename = f"uncertainties_summary_{function_name}_{noise_type}"
+    if model_name:
+        filename = f"{model_name}_{base_filename}"
+    else:
+        filename = base_filename
+    
     # Save statistics to CSV and Excel (Excel is saved automatically)
-    save_statistics(stats_df, f"uncertainties_summary_{function_name}_{noise_type}", 
+    save_statistics(stats_df, filename, 
                     subfolder=f"{noise_type}/{func_type}", save_excel=True)
     
     # Create and save summary plots (uncertainties and correlations)
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    
+    # Add model name to title if provided
+    title_suffix = f" - {model_name}" if model_name else ""
     
     # Plot 1: Normalized Average Uncertainties
     ax1.plot(percentages, avg_ale_norm_list, 'o-', linewidth=2, markersize=8, 
@@ -156,7 +177,7 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
              label='Total Uncertainty', color='blue')
     ax1.set_xlabel('Training Data Percentage (%)', fontsize=12)
     ax1.set_ylabel('Normalized Average Uncertainty', fontsize=12)
-    ax1.set_title(f'Normalized Average Uncertainties vs Training Data Percentage\n{function_name} Function ({noise_type.capitalize()})', 
+    ax1.set_title(f'Normalized Average Uncertainties vs Training Data Percentage\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
                   fontsize=13, fontweight='bold')
     ax1.legend(fontsize=10, loc='best')
     ax1.grid(True, alpha=0.3)
@@ -169,7 +190,7 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
     ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
     ax2.set_xlabel('Training Data Percentage (%)', fontsize=12)
     ax2.set_ylabel('Correlation Coefficient', fontsize=12)
-    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()})', 
+    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
                   fontsize=13, fontweight='bold')
     ax2.legend(fontsize=10, loc='best')
     ax2.grid(True, alpha=0.3)
@@ -178,7 +199,7 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
     
     plt.tight_layout()
     
-    save_plot(fig, f"uncertainties_summary_{function_name}_{noise_type}", 
+    save_plot(fig, filename, 
               subfolder=f"{noise_type}/{func_type}")
     
     return stats_df, fig
