@@ -34,6 +34,10 @@ def plot_uncertainties_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, m
     fig, axes = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
     x = x_grid[:, 0]
     
+    # Ensure mu_pred is 1D for plotting (handle both 1D and 2D inputs)
+    if mu_pred.ndim > 1:
+        mu_pred = mu_pred.squeeze()
+    
     # Plot 1: Predictive mean + Total uncertainty
     axes[0].scatter(x_train_subset[:, 0], y_train_subset[:, 0], alpha=0.6, s=20, color='blue', label="Training data", zorder=3)
     axes[0].plot(x, mu_pred, 'b-', linewidth=2, label="Predictive mean")
