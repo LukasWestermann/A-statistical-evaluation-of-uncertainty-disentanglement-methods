@@ -247,7 +247,7 @@ def compute_and_save_statistics_noise_level(
     # Compute min/max for normalization
     ale_min, ale_max = all_ale.min(), all_ale.max()
     epi_min, epi_max = all_epi.min(), all_epi.max()
-    tot_min, tot_max = all_tot.min(), all_tot.max()
+    
     
     def normalize(values, vmin, vmax):
         """Normalize values to [0, 1] range"""
@@ -276,7 +276,7 @@ def compute_and_save_statistics_noise_level(
         
         ale_norm = normalize(ale_vals, ale_min, ale_max)
         epi_norm = normalize(epi_vals, epi_min, epi_max)
-        tot_norm = normalize(tot_vals, tot_min, tot_max)
+        tot_norm = ale_norm + epi_norm
         
         avg_ale_norm = np.mean(ale_norm)
         avg_epi_norm = np.mean(epi_norm)
