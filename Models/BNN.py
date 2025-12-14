@@ -1,6 +1,9 @@
 # PyTorch + Pyro BNN with NUTS MCMC for regression with uncertainty decomposition
 # Heteroscedastic likelihood: y ~ Normal(mu(x), sigma(x)), sigma(x) via Softplus
 # Decomposition: aleatoric = E[sigma^2], epistemic = Var(mu) across posterior samples
+#
+# NOTE: Pyro MCMC has known GPU compatibility issues, so we use CPU for all operations.
+# This ensures stability and avoids device mismatch errors.
 
 import numpy as np
 import torch
@@ -15,13 +18,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from utils.device import get_device
-
-# Get device
-device = get_device()
-
 # Set Pyro random seed (can be overridden)
 pyro.set_rng_seed(0)
+
+# Use CPU for all Pyro operations (Pyro MCMC has GPU compatibility issues)
+cpu_device = torch.device("cpu")
 
 
 # ---------- Model Architecture ----------
@@ -52,7 +53,7 @@ def bnn_model(x, y=None, hidden_width=16, weight_scale=1.0):
     Pyro BNN model with heteroscedastic noise.
     
     Args:
-        x: Input tensor [N, 1]
+        x: Input tensor [N, 1] (on CPU)
         y: Target tensor [N] or None for prediction
         hidden_width: Width of hidden layers
         weight_scale: Scale of weight priors
@@ -62,19 +63,16 @@ def bnn_model(x, y=None, hidden_width=16, weight_scale=1.0):
     """
     N = x.shape[0]
     H = hidden_width
-    
-    # Get device from input tensor to ensure all tensors are on the same device
-    x_device = x.device
 
-    # Priors on weights/biases (Gaussian) - move to same device as x
-    W1   = pyro.sample("W1",   dist.Normal(0, weight_scale).expand([1, H]).to_event(2)).to(x_device)
-    b1   = pyro.sample("b1",   dist.Normal(0, weight_scale).expand([H]).to_event(1)).to(x_device)
-    W2   = pyro.sample("W2",   dist.Normal(0, weight_scale).expand([H, H]).to_event(2)).to(x_device)
-    b2   = pyro.sample("b2",   dist.Normal(0, weight_scale).expand([H]).to_event(1)).to(x_device)
-    W_mu = pyro.sample("W_mu", dist.Normal(0, weight_scale).expand([H, 1]).to_event(2)).to(x_device)
-    b_mu = pyro.sample("b_mu", dist.Normal(0, weight_scale).expand([1]).to_event(1)).to(x_device)
-    W_rho= pyro.sample("W_rho",dist.Normal(0, weight_scale).expand([H, 1]).to_event(2)).to(x_device)
-    b_rho= pyro.sample("b_rho",dist.Normal(0, weight_scale).expand([1]).to_event(1)).to(x_device)
+    # Priors on weights/biases (Gaussian) - all on CPU
+    W1   = pyro.sample("W1",   dist.Normal(0, weight_scale).expand([1, H]).to_event(2))
+    b1   = pyro.sample("b1",   dist.Normal(0, weight_scale).expand([H]).to_event(1))
+    W2   = pyro.sample("W2",   dist.Normal(0, weight_scale).expand([H, H]).to_event(2))
+    b2   = pyro.sample("b2",   dist.Normal(0, weight_scale).expand([H]).to_event(1))
+    W_mu = pyro.sample("W_mu", dist.Normal(0, weight_scale).expand([H, 1]).to_event(2))
+    b_mu = pyro.sample("b_mu", dist.Normal(0, weight_scale).expand([1]).to_event(1))
+    W_rho= pyro.sample("W_rho",dist.Normal(0, weight_scale).expand([H, 1]).to_event(2))
+    b_rho= pyro.sample("b_rho",dist.Normal(0, weight_scale).expand([1]).to_event(1))
 
     mu, sigma = forward_nn(x, W1, b1, W2, b2, W_mu, b_mu, W_rho, b_rho)  # [N], [N]
     pyro.deterministic("mu",   mu)
@@ -93,8 +91,8 @@ def run_nuts(x_train_t, y_train_t, hidden_width=16, weight_scale=1.0,
     Run NUTS MCMC to sample from posterior.
     
     Args:
-        x_train_t: Training inputs [N, 1] torch tensor
-        y_train_t: Training targets [N] torch tensor
+        x_train_t: Training inputs [N, 1] torch tensor (on CPU)
+        y_train_t: Training targets [N] torch tensor (on CPU)
         hidden_width: Width of hidden layers
         weight_scale: Scale of weight priors
         warmup: Number of warmup steps
@@ -119,6 +117,8 @@ def train_bnn(x_train, y_train, hidden_width=16, weight_scale=1.0,
     """
     Train BNN using MCMC.
     
+    NOTE: Uses CPU for all operations due to Pyro MCMC GPU compatibility issues.
+    
     Args:
         x_train: Training inputs [N, 1] numpy array
         y_train: Training targets [N, 1] or [N] numpy array
@@ -132,14 +132,14 @@ def train_bnn(x_train, y_train, hidden_width=16, weight_scale=1.0,
     Returns:
         Trained MCMC object
     """
-    # Convert to torch tensors
-    x_train_t = torch.from_numpy(x_train).to(device)
+    # Convert to torch tensors - use CPU for Pyro MCMC
+    x_train_t = torch.from_numpy(x_train).to(cpu_device)
     
     # Handle 2D y arrays
     if y_train.ndim > 1 and y_train.shape[-1] == 1:
-        y_train_t = torch.from_numpy(y_train.squeeze(-1)).to(device)
+        y_train_t = torch.from_numpy(y_train.squeeze(-1)).to(cpu_device)
     else:
-        y_train_t = torch.from_numpy(y_train).to(device)
+        y_train_t = torch.from_numpy(y_train).to(cpu_device)
     
     mcmc = run_nuts(x_train_t, y_train_t, hidden_width, weight_scale, 
                     warmup, samples, chains, seed)
@@ -153,7 +153,7 @@ def posterior_predictive(mcmc, x_new_t, hidden_width=16, weight_scale=1.0):
     
     Args:
         mcmc: Trained MCMC object
-        x_new_t: New inputs [M, 1] torch tensor
+        x_new_t: New inputs [M, 1] torch tensor (on CPU)
         hidden_width: Width of hidden layers (must match training)
         weight_scale: Scale of weight priors (must match training)
     
@@ -216,6 +216,8 @@ def bnn_predict(mcmc, x, hidden_width=16, weight_scale=1.0):
     """
     Make predictions with uncertainty decomposition.
     
+    NOTE: Uses CPU for all operations (consistent with training).
+    
     Args:
         mcmc: Trained MCMC object
         x: Input array [N, 1] numpy array
@@ -228,7 +230,8 @@ def bnn_predict(mcmc, x, hidden_width=16, weight_scale=1.0):
         epi_var: Epistemic variance [N]
         tot_var: Total variance [N]
     """
-    x_t = torch.from_numpy(x).to(device)
+    # Use CPU for prediction (since MCMC was on CPU)
+    x_t = torch.from_numpy(x).to(cpu_device)
     preds = posterior_predictive(mcmc, x_t, hidden_width, weight_scale)
     
     mu_samps = preds["mu"]       # [S, N] or [S, 1, N]

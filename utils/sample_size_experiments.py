@@ -135,10 +135,6 @@ def _train_single_percentage_bnn(args):
     (worker_id, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
      seed, hidden_width, weight_scale, warmup, samples, chains, func_type, noise_type) = args
     
-    # Set device for this worker
-    device = get_device_for_worker(worker_id)
-    torch.cuda.set_device(device) if device.type == 'cuda' else None
-    
     # Set seed for reproducibility
     np.random.seed(seed + int(pct))
     torch.manual_seed(seed + int(pct))
@@ -162,7 +158,7 @@ def _train_single_percentage_bnn(args):
     x_train_subset_norm = bnn_normalize_x_data(x_train_subset, x_mean, x_std)
     x_grid_norm = bnn_normalize_x_data(x_grid, x_mean, x_std)
     
-    # Train BNN with MCMC
+    # Train BNN with MCMC (uses CPU internally)
     mcmc = train_bnn(
         x_train_subset_norm, y_train_subset,
         hidden_width=hidden_width, weight_scale=weight_scale,
