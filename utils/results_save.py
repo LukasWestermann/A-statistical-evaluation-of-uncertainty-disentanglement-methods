@@ -125,7 +125,8 @@ def save_summary_text(text, filename, subfolder=''):
 
 def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list, 
                            avg_tot_norm_list, correlation_list, function_name, 
-                           noise_type='heteroscedastic', func_type='', model_name=''):
+                           noise_type='heteroscedastic', func_type='', model_name='',
+                           mse_list=None):
     """Helper function to save summary statistics and create summary plot
     
     Args:
@@ -138,18 +139,25 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
         noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
         func_type: Function type identifier (e.g., 'linear', 'sin')
         model_name: Name of the model (e.g., 'MC_Dropout', 'Deep_Ensemble') - optional
+        mse_list: Optional list of MSE values to include in statistics and plots
     
     Returns:
         tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
     """
     # Create DataFrame with summary statistics
-    stats_df = pd.DataFrame({
+    stats_dict = {
         'Percentage': percentages,
         'Avg_Aleatoric_norm': avg_ale_norm_list,
         'Avg_Epistemic_norm': avg_epi_norm_list,
         'Avg_Total_norm': avg_tot_norm_list,
         'Correlation_Epi_Ale': correlation_list
-    })
+    }
+    
+    # Add MSE if provided
+    if mse_list is not None:
+        stats_dict['MSE'] = mse_list
+    
+    stats_df = pd.DataFrame(stats_dict)
     
     # Build filename with optional model prefix
     base_filename = f"uncertainties_summary_{function_name}_{noise_type}"
@@ -162,8 +170,12 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
     save_statistics(stats_df, filename, 
                     subfolder=f"{noise_type}/{func_type}", save_excel=True)
     
-    # Create and save summary plots (uncertainties and correlations)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    # Create and save summary plots
+    # Use 3 subplots if MSE is provided, otherwise 2
+    if mse_list is not None:
+        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 6))
+    else:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
     
     # Add model name to title if provided
     title_suffix = f" - {model_name}" if model_name else ""
@@ -197,9 +209,116 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
     ax2.set_xlim(0, 105)
     ax2.set_ylim(-1.05, 1.05)
     
+    # Plot 3: MSE (if provided)
+    if mse_list is not None:
+        ax3.plot(percentages, mse_list, '*-', linewidth=2, markersize=8, 
+                 label='MSE', color='red')
+        ax3.set_xlabel('Training Data Percentage (%)', fontsize=12)
+        ax3.set_ylabel('Mean Squared Error', fontsize=12)
+        ax3.set_title(f'MSE vs Training Data Percentage\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
+                      fontsize=13, fontweight='bold')
+        ax3.legend(fontsize=10, loc='best')
+        ax3.grid(True, alpha=0.3)
+        ax3.set_xlim(0, 105)
+        ax3.set_yscale('log')  # Use log scale for MSE as it can vary widely
+    
     plt.tight_layout()
     
     save_plot(fig, filename, 
               subfolder=f"{noise_type}/{func_type}")
+    
+    return stats_df, fig
+
+def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_norm_list, 
+                                       avg_tot_norm_list, correlation_list, mse_list,
+                                       function_name, distribution='normal',
+                                       noise_type='heteroscedastic', func_type='', model_name=''):
+    """Helper function to save summary statistics and create summary plot for noise level experiments
+    
+    Args:
+        tau_values: List of tau (noise level) values
+        avg_ale_norm_list: List of normalized average aleatoric uncertainties
+        avg_epi_norm_list: List of normalized average epistemic uncertainties
+        avg_tot_norm_list: List of normalized average total uncertainties
+        correlation_list: List of correlations between epistemic and aleatoric uncertainties
+        mse_list: List of MSE values
+        function_name: Name of the function (e.g., 'Linear', 'Sinusoidal')
+        distribution: Noise distribution ('normal' or 'laplace')
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        func_type: Function type identifier (e.g., 'linear', 'sin')
+        model_name: Name of the model (e.g., 'MC_Dropout', 'Deep_Ensemble') - optional
+    
+    Returns:
+        tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
+    """
+    # Create DataFrame with summary statistics
+    stats_df = pd.DataFrame({
+        'Tau': tau_values,
+        'Distribution': [distribution] * len(tau_values),
+        'Avg_Aleatoric_norm': avg_ale_norm_list,
+        'Avg_Epistemic_norm': avg_epi_norm_list,
+        'Avg_Total_norm': avg_tot_norm_list,
+        'Correlation_Epi_Ale': correlation_list,
+        'MSE': mse_list
+    })
+    
+    # Build filename with optional model prefix and distribution
+    base_filename = f"uncertainties_summary_{function_name}_{noise_type}_{distribution}"
+    if model_name:
+        filename = f"{model_name}_{base_filename}"
+    else:
+        filename = base_filename
+    
+    # Save statistics to CSV and Excel (Excel is saved automatically)
+    save_statistics(stats_df, filename, 
+                    subfolder=f"{noise_type}/{func_type}/{distribution}", save_excel=True)
+    
+    # Create and save summary plots (uncertainties, correlations, and MSE)
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 6))
+    
+    # Add model name to title if provided
+    title_suffix = f" - {model_name}" if model_name else ""
+    
+    # Plot 1: Normalized Average Uncertainties
+    ax1.plot(tau_values, avg_ale_norm_list, 'o-', linewidth=2, markersize=8, 
+             label='Aleatoric Uncertainty', color='green')
+    ax1.plot(tau_values, avg_epi_norm_list, 's-', linewidth=2, markersize=8, 
+             label='Epistemic Uncertainty', color='orange')
+    ax1.plot(tau_values, avg_tot_norm_list, '^-', linewidth=2, markersize=8, 
+             label='Total Uncertainty', color='blue')
+    ax1.set_xlabel('Tau (Noise Level)', fontsize=12)
+    ax1.set_ylabel('Normalized Average Uncertainty', fontsize=12)
+    ax1.set_title(f'Normalized Average Uncertainties vs Tau\n{function_name} Function ({noise_type.capitalize()}, {distribution}){title_suffix}', 
+                  fontsize=13, fontweight='bold')
+    ax1.legend(fontsize=10, loc='best')
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Correlation between Epistemic and Aleatoric Uncertainties
+    ax2.plot(tau_values, correlation_list, 'D-', linewidth=2, markersize=8, 
+             label='Correlation (Epi-Ale)', color='purple')
+    ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+    ax2.set_xlabel('Tau (Noise Level)', fontsize=12)
+    ax2.set_ylabel('Correlation Coefficient', fontsize=12)
+    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()}, {distribution}){title_suffix}', 
+                  fontsize=13, fontweight='bold')
+    ax2.legend(fontsize=10, loc='best')
+    ax2.grid(True, alpha=0.3)
+    ax2.set_ylim(-1.05, 1.05)
+    
+    # Plot 3: MSE
+    ax3.plot(tau_values, mse_list, '*-', linewidth=2, markersize=8, 
+             label='MSE', color='red')
+    ax3.set_xlabel('Tau (Noise Level)', fontsize=12)
+    ax3.set_ylabel('Mean Squared Error', fontsize=12)
+    ax3.set_title(f'MSE vs Tau\n{function_name} Function ({noise_type.capitalize()}, {distribution}){title_suffix}', 
+                  fontsize=13, fontweight='bold')
+    ax3.legend(fontsize=10, loc='best')
+    ax3.grid(True, alpha=0.3)
+    ax3.set_yscale('log')  # Use log scale for MSE as it can vary widely
+    
+    plt.tight_layout()
+    
+    save_plot(fig, filename, 
+              subfolder=f"{noise_type}/{func_type}/{distribution}")
     
     return stats_df, fig

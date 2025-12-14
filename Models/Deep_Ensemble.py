@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
+from concurrent.futures import ThreadPoolExecutor
+import multiprocessing as mp
 
 from utils.device import get_device
 
@@ -71,17 +73,43 @@ def train_single_ensemble(model, loader, epochs=700, lr=1e-3, loss_type='nll', b
             print(f"[{loss_type}] Epoch {epoch+1}/{epochs} - avg loss {total_loss/len(loader.dataset):.4f}")
 
 # ----- Train an ensemble of K models -----
-def train_ensemble_deep(x_train, y_train, batch_size=32, K=5, loss_type='nll', beta=0.5):
+def train_ensemble_deep(x_train, y_train, batch_size=32, K=5, loss_type='nll', beta=0.5, parallel=True):
+    """
+    Train an ensemble of K models.
+    
+    Args:
+        x_train: Training inputs
+        y_train: Training targets
+        batch_size: Batch size for training
+        K: Number of ensemble members
+        loss_type: 'nll' or 'beta_nll'
+        beta: Beta parameter for beta-NLL loss
+        parallel: If True, train ensemble members in parallel using ThreadPoolExecutor
+    
+    Returns:
+        List of trained models
+    """
     ds = TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train))
     loader = DataLoader(ds, batch_size=batch_size, shuffle=True)
 
-    ensemble = []
-    for k in range(K):
+    def train_member(k):
+        """Train a single ensemble member."""
         model = BaselineRegressor()
         # Different seed per member to vary initialization and shuffling
         member_seed = base_seed + 1000 + k
         train_single_ensemble(model, loader, epochs=700, lr=1e-3, loss_type=loss_type, beta=beta, seed=member_seed)
-        ensemble.append(model)
+        return model
+    
+    if parallel and K > 1:
+        # Use ThreadPoolExecutor for parallel training
+        # Note: Threads share the same GPU, which is fine for ensemble members
+        max_workers = min(K, mp.cpu_count())
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            ensemble = list(executor.map(train_member, range(K)))
+    else:
+        # Sequential training
+        ensemble = [train_member(k) for k in range(K)]
+    
     return ensemble
 
 # ----- Ensemble prediction and uncertainty decomposition -----

@@ -23,3 +23,27 @@ def get_device():
         print(f"Found {num_gpus} GPUs. Using GPU {best_gpu}: {torch.cuda.get_device_name(best_gpu)}")
    
     return device
+
+def get_device_for_worker(worker_id):
+    """
+    Get device for a specific worker in parallel execution.
+    Uses round-robin assignment across available GPUs.
+    
+    Args:
+        worker_id: Integer ID of the worker (0-indexed)
+    
+    Returns:
+        torch.device: Device assigned to this worker
+    """
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    
+    num_gpus = torch.cuda.device_count()
+    gpu_id = worker_id % num_gpus
+    return torch.device(f"cuda:{gpu_id}")
+
+def get_num_gpus():
+    """Get number of available GPUs."""
+    if torch.cuda.is_available():
+        return torch.cuda.device_count()
+    return 0
