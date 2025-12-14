@@ -62,16 +62,19 @@ def bnn_model(x, y=None, hidden_width=16, weight_scale=1.0):
     """
     N = x.shape[0]
     H = hidden_width
+    
+    # Get device from input tensor to ensure all tensors are on the same device
+    x_device = x.device
 
-    # Priors on weights/biases (Gaussian)
-    W1   = pyro.sample("W1",   dist.Normal(0, weight_scale).expand([1, H]).to_event(2))
-    b1   = pyro.sample("b1",   dist.Normal(0, weight_scale).expand([H]).to_event(1))
-    W2   = pyro.sample("W2",   dist.Normal(0, weight_scale).expand([H, H]).to_event(2))
-    b2   = pyro.sample("b2",   dist.Normal(0, weight_scale).expand([H]).to_event(1))
-    W_mu = pyro.sample("W_mu", dist.Normal(0, weight_scale).expand([H, 1]).to_event(2))
-    b_mu = pyro.sample("b_mu", dist.Normal(0, weight_scale).expand([1]).to_event(1))
-    W_rho= pyro.sample("W_rho",dist.Normal(0, weight_scale).expand([H, 1]).to_event(2))
-    b_rho= pyro.sample("b_rho",dist.Normal(0, weight_scale).expand([1]).to_event(1))
+    # Priors on weights/biases (Gaussian) - move to same device as x
+    W1   = pyro.sample("W1",   dist.Normal(0, weight_scale).expand([1, H]).to_event(2)).to(x_device)
+    b1   = pyro.sample("b1",   dist.Normal(0, weight_scale).expand([H]).to_event(1)).to(x_device)
+    W2   = pyro.sample("W2",   dist.Normal(0, weight_scale).expand([H, H]).to_event(2)).to(x_device)
+    b2   = pyro.sample("b2",   dist.Normal(0, weight_scale).expand([H]).to_event(1)).to(x_device)
+    W_mu = pyro.sample("W_mu", dist.Normal(0, weight_scale).expand([H, 1]).to_event(2)).to(x_device)
+    b_mu = pyro.sample("b_mu", dist.Normal(0, weight_scale).expand([1]).to_event(1)).to(x_device)
+    W_rho= pyro.sample("W_rho",dist.Normal(0, weight_scale).expand([H, 1]).to_event(2)).to(x_device)
+    b_rho= pyro.sample("b_rho",dist.Normal(0, weight_scale).expand([1]).to_event(1)).to(x_device)
 
     mu, sigma = forward_nn(x, W1, b1, W2, b2, W_mu, b_mu, W_rho, b_rho)  # [N], [N]
     pyro.deterministic("mu",   mu)
