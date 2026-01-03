@@ -113,7 +113,7 @@ def train_ensemble_deep(x_train, y_train, batch_size=32, K=5, loss_type='nll', b
     return ensemble
 
 # ----- Ensemble prediction and uncertainty decomposition -----
-def ensemble_predict_deep(ensemble, x):
+def ensemble_predict_deep(ensemble, x, return_raw_arrays=False):
     x_t = torch.from_numpy(x).to(device)
     mus = []
     vars_ = []
@@ -131,4 +131,8 @@ def ensemble_predict_deep(ensemble, x):
     aleatoric_var = vars_.mean(axis=0)     # E[σ²] across ensemble
     epistemic_var = mus.var(axis=0)        # Var[μ] across ensemble
     total_var = aleatoric_var + epistemic_var
-    return mu_pred, aleatoric_var, epistemic_var, total_var
+    
+    if return_raw_arrays:
+        return mu_pred, aleatoric_var, epistemic_var, total_var, (mus, vars_)
+    else:
+        return mu_pred, aleatoric_var, epistemic_var, total_var

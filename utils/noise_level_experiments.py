@@ -16,8 +16,9 @@ from torch.utils.data import TensorDataset, DataLoader
 from concurrent.futures import ProcessPoolExecutor
 import matplotlib.pyplot as plt
 import multiprocessing
+from datetime import datetime
 
-from utils.results_save import save_summary_statistics_noise_level
+from utils.results_save import save_summary_statistics_noise_level, save_model_outputs
 from utils.plotting import plot_uncertainties_no_ood
 from utils.device import get_device_for_worker, get_num_gpus
 
@@ -68,15 +69,16 @@ def _train_single_tau_mc_dropout(args):
     model = MCDropoutRegressor(p=p)
     train_model(model, loader, epochs=epochs, lr=lr, loss_type='beta_nll', beta=beta)
     
-    # Make predictions
-    mu_pred, ale_var, epi_var, tot_var = mc_dropout_predict(model, x_grid_norm, M=mc_samples)
+    # Make predictions with raw arrays
+    result = mc_dropout_predict(model, x_grid_norm, M=mc_samples, return_raw_arrays=True)
+    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
     
     # Compute MSE
     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
     mse = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
     
-    return tau, distribution, mu_pred, ale_var, epi_var, tot_var, mse
+    return tau, distribution, mu_pred, ale_var, epi_var, tot_var, mse, mu_samples, sigma2_samples, x_train, y_train
 
 
 def _train_single_tau_deep_ensemble(args):
@@ -114,15 +116,16 @@ def _train_single_tau_deep_ensemble(args):
         loss_type='beta_nll', beta=beta, parallel=True
     )
     
-    # Make predictions
-    mu_pred, ale_var, epi_var, tot_var = ensemble_predict_deep(ensemble, x_grid_norm)
+    # Make predictions with raw arrays
+    result = ensemble_predict_deep(ensemble, x_grid_norm, return_raw_arrays=True)
+    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
     
     # Compute MSE
     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
     mse = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
     
-    return tau, distribution, mu_pred, ale_var, epi_var, tot_var, mse
+    return tau, distribution, mu_pred, ale_var, epi_var, tot_var, mse, mu_samples, sigma2_samples, x_train, y_train
 
 
 def _train_single_tau_bnn(args):
@@ -153,18 +156,20 @@ def _train_single_tau_bnn(args):
         warmup=warmup, samples=samples, chains=chains, seed=seed + int(tau * 100)
     )
     
-    # Make predictions
-    mu_pred, ale_var, epi_var, tot_var = bnn_predict(
+    # Make predictions with raw arrays
+    result = bnn_predict(
         mcmc, x_grid_norm,
-        hidden_width=hidden_width, weight_scale=weight_scale
+        hidden_width=hidden_width, weight_scale=weight_scale,
+        return_raw_arrays=True
     )
+    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
     
     # Compute MSE
     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
     mse = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
     
-    return tau, distribution, mu_pred, ale_var, epi_var, tot_var, mse
+    return tau, distribution, mu_pred, ale_var, epi_var, tot_var, mse, mu_samples, sigma2_samples, x_train, y_train
 
 
 def _train_single_tau_bamlss(args):
@@ -178,18 +183,20 @@ def _train_single_tau_bamlss(args):
     
     from Models.BAMLSS import bamlss_predict
     
-    # BAMLSS fits directly using passed data
-    mu_pred, ale_var, epi_var, tot_var = bamlss_predict(
+    # BAMLSS fits directly using passed data - get raw arrays
+    result = bamlss_predict(
         x_train, y_train, x_grid,
-        n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples
+        n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples,
+        return_raw_arrays=True
     )
+    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
     
     # Compute MSE
     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
     mse = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
     
-    return tau, distribution, mu_pred, ale_var, epi_var, tot_var, mse
+    return tau, distribution, mu_pred, ale_var, epi_var, tot_var, mse, mu_samples, sigma2_samples, x_train, y_train
 
 
 def compute_and_save_statistics_noise_level(
@@ -200,7 +207,11 @@ def compute_and_save_statistics_noise_level(
     distribution: str,
     noise_type: str,
     func_type: str,
-    model_name: str
+    model_name: str,
+    date: str = None,
+    dropout_p: float = None,
+    mc_samples: int = None,
+    n_nets: int = None
 ):
     """
     Shared function to compute normalized statistics and save results for noise level experiments.
@@ -226,6 +237,14 @@ def compute_and_save_statistics_noise_level(
         Function type identifier (e.g., 'linear', 'sin')
     model_name : str
         Model name for saving results (e.g., 'MC_Dropout', 'Deep_Ensemble')
+    date : str, optional
+        Date string in YYYYMMDD format
+    dropout_p : float, optional
+        Dropout probability for MC Dropout
+    mc_samples : int, optional
+        Number of MC samples for MC Dropout
+    n_nets : int, optional
+        Number of nets for Deep Ensemble
     
     Returns:
     --------
@@ -300,7 +319,8 @@ def compute_and_save_statistics_noise_level(
         tau_values, avg_ale_norm_list, avg_epi_norm_list,
         avg_tot_norm_list, correlation_list, mse_list,
         function_name, distribution=distribution,
-        noise_type=noise_type, func_type=func_type, model_name=model_name
+        noise_type=noise_type, func_type=func_type, model_name=model_name,
+        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
     )
     plt.show()
     plt.close(fig)
@@ -380,6 +400,9 @@ def run_mc_dropout_noise_level_experiment(
     
     function_names = {"linear": "Linear", "sin": "Sinusoidal"}
     
+    # Generate date at the start of the experiment
+    date = datetime.now().strftime('%Y%m%d')
+    
     for func_type in function_types:
         for distribution in distributions:
             print(f"\n{'#'*80}")
@@ -429,22 +452,30 @@ def run_mc_dropout_noise_level_experiment(
                             results = list(executor.map(_train_single_tau_mc_dropout, args_list))
                     
                     # Process results
-                    for tau, dist, mu_pred, ale_var, epi_var, tot_var, mse in results:
+                    for result in results:
+                        tau, dist, mu_pred, ale_var, epi_var, tot_var, mse, mu_samples, sigma2_samples, x_train_plot, y_train_plot = result
                         uncertainties_by_tau[tau]['ale'].append(ale_var)
                         uncertainties_by_tau[tau]['epi'].append(epi_var)
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
                         
-                        # Get training data for plotting
-                        np.random.seed(seed + int(tau * 100))
-                        x_train_plot, y_train_plot, _, _ = generate_toy_regression_func(
-                            n_train=n_train,
-                            train_range=train_range,
-                            grid_points=grid_points,
+                        # Save raw model outputs
+                        save_model_outputs(
+                            mu_samples=mu_samples,
+                            sigma2_samples=sigma2_samples,
+                            x_grid=x_grid,
+                            y_grid_clean=y_grid_clean,
+                            x_train_subset=x_train_plot,
+                            y_train_subset=y_train_plot,
+                            model_name='MC_Dropout',
                             noise_type=noise_type,
-                            type=func_type,
+                            func_type=func_type,
+                            subfolder='noise_level',
                             tau=tau,
-                            distribution=distribution
+                            distribution=distribution,
+                            dropout_p=p,
+                            mc_samples=mc_samples,
+                            date=date
                         )
                         
                         plot_uncertainties_no_ood(
@@ -488,7 +519,9 @@ def run_mc_dropout_noise_level_experiment(
                     model = MCDropoutRegressor(p=p)
                     train_model(model, loader, epochs=epochs, lr=lr, loss_type='beta_nll', beta=beta)
                     
-                    mu_pred, ale_var, epi_var, tot_var = mc_dropout_predict(model, x_grid_norm, M=mc_samples)
+                    # Make predictions with raw arrays
+                    result = mc_dropout_predict(model, x_grid_norm, M=mc_samples, return_raw_arrays=True)
+                    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                     
                     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -498,6 +531,25 @@ def run_mc_dropout_noise_level_experiment(
                     uncertainties_by_tau[tau]['epi'].append(epi_var)
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
+                    
+                    # Save raw model outputs
+                    save_model_outputs(
+                        mu_samples=mu_samples,
+                        sigma2_samples=sigma2_samples,
+                        x_grid=x_grid,
+                        y_grid_clean=y_grid_clean,
+                        x_train_subset=x_train,
+                        y_train_subset=y_train,
+                        model_name='MC_Dropout',
+                        noise_type=noise_type,
+                        func_type=func_type,
+                        subfolder='noise_level',
+                        tau=tau,
+                        distribution=distribution,
+                        dropout_p=p,
+                        mc_samples=mc_samples,
+                        date=date
+                    )
                     
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
@@ -511,7 +563,8 @@ def run_mc_dropout_noise_level_experiment(
             compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
-                noise_type, func_type, 'MC_Dropout'
+                noise_type, func_type, 'MC_Dropout',
+                date=date, dropout_p=p, mc_samples=mc_samples
             )
 
 
@@ -571,6 +624,9 @@ def run_deep_ensemble_noise_level_experiment(
     
     function_names = {"linear": "Linear", "sin": "Sinusoidal"}
     
+    # Generate date at the start of the experiment
+    date = datetime.now().strftime('%Y%m%d')
+    
     for func_type in function_types:
         for distribution in distributions:
             print(f"\n{'#'*80}")
@@ -612,16 +668,29 @@ def run_deep_ensemble_noise_level_experiment(
                         with ProcessPoolExecutor(max_workers=max_workers) as executor:
                             results = list(executor.map(_train_single_tau_deep_ensemble, args_list))
                     
-                    for tau, dist, mu_pred, ale_var, epi_var, tot_var, mse in results:
+                    for result in results:
+                        tau, dist, mu_pred, ale_var, epi_var, tot_var, mse, mu_samples, sigma2_samples, x_train_plot, y_train_plot = result
                         uncertainties_by_tau[tau]['ale'].append(ale_var)
                         uncertainties_by_tau[tau]['epi'].append(epi_var)
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
                         
-                        np.random.seed(seed + int(tau * 100))
-                        x_train_plot, y_train_plot, _, _ = generate_toy_regression_func(
-                            n_train=n_train, train_range=train_range, grid_points=grid_points,
-                            noise_type=noise_type, type=func_type, tau=tau, distribution=distribution
+                        # Save raw model outputs
+                        save_model_outputs(
+                            mu_samples=mu_samples,
+                            sigma2_samples=sigma2_samples,
+                            x_grid=x_grid,
+                            y_grid_clean=y_grid_clean,
+                            x_train_subset=x_train_plot,
+                            y_train_subset=y_train_plot,
+                            model_name='Deep_Ensemble',
+                            noise_type=noise_type,
+                            func_type=func_type,
+                            subfolder='noise_level',
+                            tau=tau,
+                            distribution=distribution,
+                            n_nets=K,
+                            date=date
                         )
                         
                         plot_uncertainties_no_ood(
@@ -658,7 +727,9 @@ def run_deep_ensemble_noise_level_experiment(
                         loss_type='beta_nll', beta=beta, parallel=True
                     )
                     
-                    mu_pred, ale_var, epi_var, tot_var = ensemble_predict_deep(ensemble, x_grid_norm)
+                    # Make predictions with raw arrays
+                    result = ensemble_predict_deep(ensemble, x_grid_norm, return_raw_arrays=True)
+                    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                     
                     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -668,6 +739,24 @@ def run_deep_ensemble_noise_level_experiment(
                     uncertainties_by_tau[tau]['epi'].append(epi_var)
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
+                    
+                    # Save raw model outputs
+                    save_model_outputs(
+                        mu_samples=mu_samples,
+                        sigma2_samples=sigma2_samples,
+                        x_grid=x_grid,
+                        y_grid_clean=y_grid_clean,
+                        x_train_subset=x_train,
+                        y_train_subset=y_train,
+                        model_name='Deep_Ensemble',
+                        noise_type=noise_type,
+                        func_type=func_type,
+                        subfolder='noise_level',
+                        tau=tau,
+                        distribution=distribution,
+                        n_nets=K,
+                        date=date
+                    )
                     
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
@@ -680,7 +769,8 @@ def run_deep_ensemble_noise_level_experiment(
             compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
-                noise_type, func_type, 'Deep_Ensemble'
+                noise_type, func_type, 'Deep_Ensemble',
+                date=date, n_nets=K
             )
 
 
@@ -744,6 +834,9 @@ def run_bnn_noise_level_experiment(
     
     function_names = {"linear": "Linear", "sin": "Sinusoidal"}
     
+    # Generate date at the start of the experiment
+    date = datetime.now().strftime('%Y%m%d')
+    
     for func_type in function_types:
         for distribution in distributions:
             print(f"\n{'#'*80}")
@@ -785,16 +878,28 @@ def run_bnn_noise_level_experiment(
                         with ProcessPoolExecutor(max_workers=max_workers) as executor:
                             results = list(executor.map(_train_single_tau_bnn, args_list))
                     
-                    for tau, dist, mu_pred, ale_var, epi_var, tot_var, mse in results:
+                    for result in results:
+                        tau, dist, mu_pred, ale_var, epi_var, tot_var, mse, mu_samples, sigma2_samples, x_train_plot, y_train_plot = result
                         uncertainties_by_tau[tau]['ale'].append(ale_var)
                         uncertainties_by_tau[tau]['epi'].append(epi_var)
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
                         
-                        np.random.seed(seed + int(tau * 100))
-                        x_train_plot, y_train_plot, _, _ = generate_toy_regression_func(
-                            n_train=n_train, train_range=train_range, grid_points=grid_points,
-                            noise_type=noise_type, type=func_type, tau=tau, distribution=distribution
+                        # Save raw model outputs
+                        save_model_outputs(
+                            mu_samples=mu_samples,
+                            sigma2_samples=sigma2_samples,
+                            x_grid=x_grid,
+                            y_grid_clean=y_grid_clean,
+                            x_train_subset=x_train_plot,
+                            y_train_subset=y_train_plot,
+                            model_name='BNN',
+                            noise_type=noise_type,
+                            func_type=func_type,
+                            subfolder='noise_level',
+                            tau=tau,
+                            distribution=distribution,
+                            date=date
                         )
                         
                         plot_uncertainties_no_ood(
@@ -831,10 +936,13 @@ def run_bnn_noise_level_experiment(
                         warmup=warmup, samples=samples, chains=chains, seed=seed
                     )
                     
-                    mu_pred, ale_var, epi_var, tot_var = bnn_predict(
+                    # Make predictions with raw arrays
+                    result = bnn_predict(
                         mcmc, x_grid_norm,
-                        hidden_width=hidden_width, weight_scale=weight_scale
+                        hidden_width=hidden_width, weight_scale=weight_scale,
+                        return_raw_arrays=True
                     )
+                    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                     
                     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -844,6 +952,23 @@ def run_bnn_noise_level_experiment(
                     uncertainties_by_tau[tau]['epi'].append(epi_var)
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
+                    
+                    # Save raw model outputs
+                    save_model_outputs(
+                        mu_samples=mu_samples,
+                        sigma2_samples=sigma2_samples,
+                        x_grid=x_grid,
+                        y_grid_clean=y_grid_clean,
+                        x_train_subset=x_train,
+                        y_train_subset=y_train,
+                        model_name='BNN',
+                        noise_type=noise_type,
+                        func_type=func_type,
+                        subfolder='noise_level',
+                        tau=tau,
+                        distribution=distribution,
+                        date=date
+                    )
                     
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
@@ -856,7 +981,8 @@ def run_bnn_noise_level_experiment(
             compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
-                noise_type, func_type, 'BNN'
+                noise_type, func_type, 'BNN',
+                date=date
             )
 
 
@@ -912,6 +1038,9 @@ def run_bamlss_noise_level_experiment(
     
     function_names = {"linear": "Linear", "sin": "Sinusoidal"}
     
+    # Generate date at the start of the experiment
+    date = datetime.now().strftime('%Y%m%d')
+    
     for func_type in function_types:
         for distribution in distributions:
             print(f"\n{'#'*80}")
@@ -948,16 +1077,28 @@ def run_bamlss_noise_level_experiment(
                     with ProcessPoolExecutor(max_workers=max_workers) as executor:
                         results = list(executor.map(_train_single_tau_bamlss, args_list))
                     
-                    for tau, dist, mu_pred, ale_var, epi_var, tot_var, mse in results:
+                    for result in results:
+                        tau, dist, mu_pred, ale_var, epi_var, tot_var, mse, mu_samples, sigma2_samples, x_train_plot, y_train_plot = result
                         uncertainties_by_tau[tau]['ale'].append(ale_var)
                         uncertainties_by_tau[tau]['epi'].append(epi_var)
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
                         
-                        np.random.seed(seed + int(tau * 100))
-                        x_train_plot, y_train_plot, _, _ = generate_toy_regression_func(
-                            n_train=n_train, train_range=train_range, grid_points=grid_points,
-                            noise_type=noise_type, type=func_type, tau=tau, distribution=distribution
+                        # Save raw model outputs
+                        save_model_outputs(
+                            mu_samples=mu_samples,
+                            sigma2_samples=sigma2_samples,
+                            x_grid=x_grid,
+                            y_grid_clean=y_grid_clean,
+                            x_train_subset=x_train_plot,
+                            y_train_subset=y_train_plot,
+                            model_name='BAMLSS',
+                            noise_type=noise_type,
+                            func_type=func_type,
+                            subfolder='noise_level',
+                            tau=tau,
+                            distribution=distribution,
+                            date=date
                         )
                         
                         plot_uncertainties_no_ood(
@@ -984,10 +1125,13 @@ def run_bamlss_noise_level_experiment(
                         noise_type=noise_type, type=func_type, tau=tau, distribution=distribution
                     )
                     
-                    mu_pred, ale_var, epi_var, tot_var = bamlss_predict(
+                    # Make predictions with raw arrays
+                    result = bamlss_predict(
                         x_train, y_train, x_grid,
-                        n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples
+                        n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples,
+                        return_raw_arrays=True
                     )
+                    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                     
                     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -997,6 +1141,23 @@ def run_bamlss_noise_level_experiment(
                     uncertainties_by_tau[tau]['epi'].append(epi_var)
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
+                    
+                    # Save raw model outputs
+                    save_model_outputs(
+                        mu_samples=mu_samples,
+                        sigma2_samples=sigma2_samples,
+                        x_grid=x_grid,
+                        y_grid_clean=y_grid_clean,
+                        x_train_subset=x_train,
+                        y_train_subset=y_train,
+                        model_name='BAMLSS',
+                        noise_type=noise_type,
+                        func_type=func_type,
+                        subfolder='noise_level',
+                        tau=tau,
+                        distribution=distribution,
+                        date=date
+                    )
                     
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
@@ -1009,6 +1170,7 @@ def run_bamlss_noise_level_experiment(
             compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
-                noise_type, func_type, 'BAMLSS'
+                noise_type, func_type, 'BAMLSS',
+                date=date
             )
 

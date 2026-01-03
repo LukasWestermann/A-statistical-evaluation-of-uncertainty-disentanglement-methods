@@ -212,7 +212,7 @@ def decompose_uncertainty(mu_samples, sigma_samples):
     return mu_mean, aleatoric_var, epistemic_var, total_var
 
 
-def bnn_predict(mcmc, x, hidden_width=16, weight_scale=1.0):
+def bnn_predict(mcmc, x, hidden_width=16, weight_scale=1.0, return_raw_arrays=False):
     """
     Make predictions with uncertainty decomposition.
     
@@ -223,12 +223,14 @@ def bnn_predict(mcmc, x, hidden_width=16, weight_scale=1.0):
         x: Input array [N, 1] numpy array
         hidden_width: Width of hidden layers (must match training)
         weight_scale: Scale of weight priors (must match training)
+        return_raw_arrays: If True, also return raw (mu_samples, sigma_samples) arrays
     
     Returns:
         mu_pred: Predictive mean [N]
         ale_var: Aleatoric variance [N]
         epi_var: Epistemic variance [N]
         tot_var: Total variance [N]
+        (mu_samples, sigma_samples): Optional, shape [S, N] each
     """
     # Use CPU for prediction (since MCMC was on CPU)
     x_t = torch.from_numpy(x).to(cpu_device)
@@ -237,9 +239,29 @@ def bnn_predict(mcmc, x, hidden_width=16, weight_scale=1.0):
     mu_samps = preds["mu"]       # [S, N] or [S, 1, N]
     sigma_samps = preds["sigma"] # [S, N] or [S, 1, N]
     
+    # Normalize shapes for consistency
+    while mu_samps.ndim > 2:
+        mu_samps = mu_samps.squeeze()
+    while sigma_samps.ndim > 2:
+        sigma_samps = sigma_samps.squeeze()
+    if mu_samps.ndim == 1:
+        mu_samps = mu_samps.reshape(1, -1)
+    if sigma_samps.ndim == 1:
+        sigma_samps = sigma_samps.reshape(1, -1)
+    if mu_samps.shape[0] > mu_samps.shape[1] and mu_samps.shape[1] == 1:
+        mu_samps = mu_samps.T
+    if sigma_samps.shape[0] > sigma_samps.shape[1] and sigma_samps.shape[1] == 1:
+        sigma_samps = sigma_samps.T
+    
     mu_pred, ale_var, epi_var, tot_var = decompose_uncertainty(mu_samps, sigma_samps)
     
-    return mu_pred, ale_var, epi_var, tot_var
+    # Convert sigma to sigma2 for consistency
+    sigma2_samps = sigma_samps ** 2
+    
+    if return_raw_arrays:
+        return mu_pred, ale_var, epi_var, tot_var, (mu_samps, sigma2_samps)
+    else:
+        return mu_pred, ale_var, epi_var, tot_var
 
 
 # ---------- Input Normalization (optional, like Deep Ensemble) ----------

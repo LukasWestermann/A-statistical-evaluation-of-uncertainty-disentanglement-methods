@@ -16,9 +16,11 @@ from torch.utils.data import TensorDataset, DataLoader
 from concurrent.futures import ProcessPoolExecutor
 import matplotlib.pyplot as plt
 import multiprocessing
+from datetime import datetime
 
-from utils.results_save import save_summary_statistics
-from utils.plotting import plot_uncertainties_no_ood
+from utils.results_save import save_summary_statistics, save_summary_statistics_entropy
+from utils.plotting import plot_uncertainties_no_ood, plot_uncertainties_entropy_no_ood
+from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 from utils.device import get_device_for_worker, get_num_gpus
 
 # Set multiprocessing start method for CUDA support (Linux: can use 'fork' or 'spawn')
@@ -36,7 +38,7 @@ except RuntimeError:
 def _train_single_percentage_mc_dropout(args):
     """Wrapper function for training MC Dropout at a single percentage (for parallel execution)."""
     (worker_id, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-     seed, p, beta, epochs, lr, batch_size, mc_samples, func_type, noise_type) = args
+     seed, p, beta, epochs, lr, batch_size, mc_samples, func_type, noise_type, entropy_method) = args
     
     # Set device for this worker
     device = get_device_for_worker(worker_id)
@@ -67,21 +69,33 @@ def _train_single_percentage_mc_dropout(args):
     model = MCDropoutRegressor(p=p)
     train_model(model, loader, epochs=epochs, lr=lr, loss_type='beta_nll', beta=beta)
     
-    # Make predictions
-    mu_pred, ale_var, epi_var, tot_var = mc_dropout_predict(model, x_grid, M=mc_samples)
+    # Make predictions with raw arrays for entropy computation
+    result = mc_dropout_predict(model, x_grid, M=mc_samples, return_raw_arrays=True)
+    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
+    
+    # Compute entropy-based uncertainties
+    if entropy_method == 'analytical':
+        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+    elif entropy_method == 'numerical':
+        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(pct))
+    else:
+        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+    ale_entropy = entropy_results['aleatoric']
+    epi_entropy = entropy_results['epistemic']
+    tot_entropy = entropy_results['total']
     
     # Compute MSE
     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
     mse = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
     
-    return pct, mu_pred, ale_var, epi_var, tot_var, mse
+    return pct, mu_pred, ale_var, epi_var, tot_var, ale_entropy, epi_entropy, tot_entropy, mse, mu_samples, sigma2_samples, x_train_subset, y_train_subset
 
 
 def _train_single_percentage_deep_ensemble(args):
     """Wrapper function for training Deep Ensemble at a single percentage (for parallel execution)."""
     (worker_id, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-     seed, beta, batch_size, K, func_type, noise_type) = args
+     seed, beta, batch_size, K, func_type, noise_type, entropy_method) = args
     
     # Set device for this worker
     device = get_device_for_worker(worker_id)
@@ -119,21 +133,33 @@ def _train_single_percentage_deep_ensemble(args):
         loss_type='beta_nll', beta=beta, parallel=True
     )
     
-    # Make predictions
-    mu_pred, ale_var, epi_var, tot_var = ensemble_predict_deep(ensemble, x_grid_norm)
+    # Make predictions with raw arrays for entropy computation
+    result = ensemble_predict_deep(ensemble, x_grid_norm, return_raw_arrays=True)
+    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
+    
+    # Compute entropy-based uncertainties
+    if entropy_method == 'analytical':
+        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+    elif entropy_method == 'numerical':
+        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(pct))
+    else:
+        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+    ale_entropy = entropy_results['aleatoric']
+    epi_entropy = entropy_results['epistemic']
+    tot_entropy = entropy_results['total']
     
     # Compute MSE
     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
     mse = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
     
-    return pct, mu_pred, ale_var, epi_var, tot_var, mse
+    return pct, mu_pred, ale_var, epi_var, tot_var, ale_entropy, epi_entropy, tot_entropy, mse, mu_samples, sigma2_samples, x_train_subset, y_train_subset
 
 
 def _train_single_percentage_bnn(args):
     """Wrapper function for training BNN at a single percentage (for parallel execution)."""
     (worker_id, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-     seed, hidden_width, weight_scale, warmup, samples, chains, func_type, noise_type) = args
+     seed, hidden_width, weight_scale, warmup, samples, chains, func_type, noise_type, entropy_method) = args
     
     # Set seed for reproducibility
     np.random.seed(seed + int(pct))
@@ -165,30 +191,44 @@ def _train_single_percentage_bnn(args):
         warmup=warmup, samples=samples, chains=chains, seed=seed + int(pct)
     )
     
-    # Make predictions
-    mu_pred, ale_var, epi_var, tot_var = bnn_predict(
+    # Make predictions with raw arrays for entropy computation
+    result = bnn_predict(
         mcmc, x_grid_norm,
-        hidden_width=hidden_width, weight_scale=weight_scale
+        hidden_width=hidden_width, weight_scale=weight_scale,
+        return_raw_arrays=True
     )
+    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
+    
+    # Compute entropy-based uncertainties
+    if entropy_method == 'analytical':
+        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+    elif entropy_method == 'numerical':
+        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(pct))
+    else:
+        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+    ale_entropy = entropy_results['aleatoric']
+    epi_entropy = entropy_results['epistemic']
+    tot_entropy = entropy_results['total']
     
     # Compute MSE
     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
     mse = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
     
-    return pct, mu_pred, ale_var, epi_var, tot_var, mse
+    return pct, mu_pred, ale_var, epi_var, tot_var, ale_entropy, epi_entropy, tot_entropy, mse, mu_samples, sigma2_samples, x_train_subset, y_train_subset
 
 
 def _train_single_percentage_bamlss(args):
     """Wrapper function for training BAMLSS at a single percentage (for parallel execution)."""
     (worker_id, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-     seed, n_iter, burnin, thin, nsamples, func_type, noise_type) = args
+     seed, n_iter, burnin, thin, nsamples, func_type, noise_type, entropy_method) = args
     
     # Set seed for reproducibility
     np.random.seed(seed + int(pct))
     torch.manual_seed(seed + int(pct))
     
     from Models.BAMLSS import bamlss_predict
+    from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
     
     # Subsample data
     n_train_full_actual = len(x_train_full)
@@ -197,18 +237,31 @@ def _train_single_percentage_bamlss(args):
     x_train_subset = x_train_full[indices]
     y_train_subset = y_train_full[indices]
     
-    # BAMLSS fits directly - no normalization or training loop needed
-    mu_pred, ale_var, epi_var, tot_var = bamlss_predict(
+    # BAMLSS fits directly - get raw arrays for entropy computation
+    result = bamlss_predict(
         x_train_subset, y_train_subset, x_grid,
-        n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples
+        n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples,
+        return_raw_arrays=True
     )
+    mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
+    
+    # Compute entropy-based uncertainties
+    if entropy_method == 'analytical':
+        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+    elif entropy_method == 'numerical':
+        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(pct))
+    else:
+        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+    ale_entropy = entropy_results['aleatoric']
+    epi_entropy = entropy_results['epistemic']
+    tot_entropy = entropy_results['total']
     
     # Compute MSE
     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
     mse = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
     
-    return pct, mu_pred, ale_var, epi_var, tot_var, mse
+    return pct, mu_pred, ale_var, epi_var, tot_var, ale_entropy, epi_entropy, tot_entropy, mse, mu_samples, sigma2_samples, x_train_subset, y_train_subset
 
 
 def compute_and_save_statistics(
@@ -218,7 +271,11 @@ def compute_and_save_statistics(
     noise_type: str,
     func_type: str,
     model_name: str,
-    mse_by_pct: dict = None
+    mse_by_pct: dict = None,
+    date: str = None,
+    dropout_p: float = None,
+    mc_samples: int = None,
+    n_nets: int = None
 ):
     """
     Shared function to compute normalized statistics and save results.
@@ -242,6 +299,14 @@ def compute_and_save_statistics(
         Model name for saving results (e.g., 'MC_Dropout', 'Deep_Ensemble')
     mse_by_pct : dict, optional
         Dictionary mapping percentage to list of MSE values
+    date : str, optional
+        Date string in YYYYMMDD format
+    dropout_p : float, optional
+        Dropout probability for MC Dropout
+    mc_samples : int, optional
+        Number of MC samples for MC Dropout
+    n_nets : int, optional
+        Number of nets for Deep Ensemble
     
     Returns:
     --------
@@ -323,7 +388,8 @@ def compute_and_save_statistics(
         avg_tot_norm_list, correlation_list,
         function_name, noise_type=noise_type,
         func_type=func_type, model_name=model_name,
-        mse_list=mse_list if mse_list else None
+        mse_list=mse_list if mse_list else None,
+        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
     )
     plt.show()
     plt.close(fig)
@@ -333,6 +399,128 @@ def compute_and_save_statistics(
         'avg_ale_norm': avg_ale_norm_list,
         'avg_epi_norm': avg_epi_norm_list,
         'avg_tot_norm': avg_tot_norm_list,
+        'correlations': correlation_list,
+        'stats_df': stats_df
+    }
+    
+    if mse_list:
+        result['mse'] = mse_list
+    
+    return result
+
+
+def compute_and_save_statistics_entropy(
+    uncertainties_by_pct: dict,
+    percentages: list,
+    function_name: str,
+    noise_type: str,
+    func_type: str,
+    model_name: str,
+    mse_by_pct: dict = None,
+    date: str = None,
+    dropout_p: float = None,
+    mc_samples: int = None,
+    n_nets: int = None
+):
+    """
+    Shared function to compute entropy-based statistics and save results.
+    
+    This function computes averages and correlations for entropy-based uncertainties,
+    prints formatted statistics, and saves results.
+    
+    Parameters:
+    -----------
+    uncertainties_by_pct : dict
+        Dictionary mapping percentage to dict with 'ale', 'epi', 'tot' entropy lists
+    percentages : list
+        List of percentages tested
+    function_name : str
+        Human-readable function name (e.g., "Linear", "Sinusoidal")
+    noise_type : str
+        'homoscedastic' or 'heteroscedastic'
+    func_type : str
+        Function type identifier (e.g., 'linear', 'sin')
+    model_name : str
+        Model name for saving results (e.g., 'MC_Dropout', 'Deep_Ensemble')
+    mse_by_pct : dict, optional
+        Dictionary mapping percentage to list of MSE values
+    date : str, optional
+        Date string in YYYYMMDD format
+    dropout_p : float, optional
+        Dropout probability for MC Dropout
+    mc_samples : int, optional
+        Number of MC samples for MC Dropout
+    n_nets : int, optional
+        Number of nets for Deep Ensemble
+    
+    Returns:
+    --------
+    dict : Statistics dictionary with percentages, averages, correlations, MSE, and stats_df
+    """
+    # Compute statistics for each percentage
+    avg_ale_entropy_list = []
+    avg_epi_entropy_list = []
+    avg_tot_entropy_list = []
+    correlation_list = []
+    mse_list = []
+    
+    print(f"\n{'='*60}")
+    print(f"Average Entropies by Percentage - {function_name} Function - {model_name}")
+    print(f"{'='*60}")
+    if mse_by_pct is not None:
+        print(f"\n{'Percentage':<12} {'Avg Aleatoric (nats)':<25} {'Avg Epistemic (nats)':<25} {'Avg Total (nats)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15}")
+        print("-" * 140)
+    else:
+        print(f"\n{'Percentage':<12} {'Avg Aleatoric (nats)':<25} {'Avg Epistemic (nats)':<25} {'Avg Total (nats)':<25} {'Correlation (Epi-Ale)':<25}")
+        print("-" * 120)
+    
+    for pct in percentages:
+        ale_vals = np.concatenate(uncertainties_by_pct[pct]['ale'])
+        epi_vals = np.concatenate(uncertainties_by_pct[pct]['epi'])
+        tot_vals = np.concatenate(uncertainties_by_pct[pct]['tot'])
+        
+        avg_ale_entropy = np.mean(ale_vals)
+        avg_epi_entropy = np.mean(epi_vals)
+        avg_tot_entropy = np.mean(tot_vals)
+        
+        correlation = np.corrcoef(epi_vals, ale_vals)[0, 1]
+        if np.isnan(correlation):
+            correlation = 0.0
+        
+        avg_ale_entropy_list.append(avg_ale_entropy)
+        avg_epi_entropy_list.append(avg_epi_entropy)
+        avg_tot_entropy_list.append(avg_tot_entropy)
+        correlation_list.append(correlation)
+        
+        if mse_by_pct is not None and pct in mse_by_pct:
+            mse_val = np.mean(mse_by_pct[pct])
+            mse_list.append(mse_val)
+            print(f"{pct:<12} {avg_ale_entropy:>24.6f}  {avg_epi_entropy:>24.6f}  {avg_tot_entropy:>24.6f}  {correlation:>24.6f}  {mse_val:>15.6f}")
+        else:
+            print(f"{pct:<12} {avg_ale_entropy:>24.6f}  {avg_epi_entropy:>24.6f}  {avg_tot_entropy:>24.6f}  {correlation:>24.6f}")
+    
+    print(f"\n{'='*60}")
+    print("Note: Entropy values are in nats (natural logarithm base)")
+    print("      Correlation is computed on entropy values")
+    print(f"{'='*60}")
+    
+    # Save summary statistics
+    stats_df, fig = save_summary_statistics_entropy(
+        percentages, avg_ale_entropy_list, avg_epi_entropy_list,
+        avg_tot_entropy_list, correlation_list,
+        function_name, noise_type=noise_type,
+        func_type=func_type, model_name=model_name,
+        mse_list=mse_list if mse_list else None,
+        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+    )
+    plt.show()
+    plt.close(fig)
+    
+    result = {
+        'percentages': percentages,
+        'avg_ale_entropy': avg_ale_entropy_list,
+        'avg_epi_entropy': avg_epi_entropy_list,
+        'avg_tot_entropy': avg_tot_entropy_list,
         'correlations': correlation_list,
         'stats_df': stats_df
     }
@@ -358,7 +546,8 @@ def run_mc_dropout_sample_size_experiment(
     lr: float = 1e-3,
     batch_size: int = 32,
     mc_samples: int = 20,
-    parallel: bool = True
+    parallel: bool = True,
+    entropy_method: str = 'analytical'
 ):
     """
     Run sample size experiment for MC Dropout model.
@@ -402,6 +591,9 @@ def run_mc_dropout_sample_size_experiment(
     
     function_names = {"linear": "Linear", "sin": "Sinusoidal"}
     
+    # Generate date at the start of the experiment
+    date = datetime.now().strftime('%Y%m%d')
+    
     for func_type in function_types:
         print(f"\n{'#'*80}")
         print(f"# Function Type: {function_names[func_type]} ({func_type}) - MC Dropout")
@@ -421,6 +613,7 @@ def run_mc_dropout_sample_size_experiment(
         
         n_train_full_actual = len(x_train_full)
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
+        uncertainties_entropy_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
         
         # Prepare arguments for parallel execution
@@ -440,7 +633,7 @@ def run_mc_dropout_sample_size_experiment(
             args_list = []
             for idx, pct in enumerate(percentages):
                 args = (idx, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-                       seed, p, beta, epochs, lr, batch_size, mc_samples, func_type, noise_type)
+                       seed, p, beta, epochs, lr, batch_size, mc_samples, func_type, noise_type, entropy_method)
                 args_list.append(args)
             
             # Execute in parallel
@@ -455,23 +648,48 @@ def run_mc_dropout_sample_size_experiment(
                         results = list(executor.map(_train_single_percentage_mc_dropout, args_list))
                 
                 # Process results and plot
-                for pct, mu_pred, ale_var, epi_var, tot_var, mse in results:
+                for result in results:
+                    pct, mu_pred, ale_var, epi_var, tot_var, ale_entropy, epi_entropy, tot_entropy, mse, mu_samples, sigma2_samples, x_train_subset, y_train_subset = result
                     uncertainties_by_pct[pct]['ale'].append(ale_var)
                     uncertainties_by_pct[pct]['epi'].append(epi_var)
                     uncertainties_by_pct[pct]['tot'].append(tot_var)
+                    uncertainties_entropy_by_pct[pct]['ale'].append(ale_entropy)
+                    uncertainties_entropy_by_pct[pct]['epi'].append(epi_entropy)
+                    uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                     mse_by_pct[pct].append(mse)
                     
-                    # Get subset for plotting
-                    n_samples = int(n_train_full_actual * pct / 100)
-                    indices = np.random.choice(n_train_full_actual, size=n_samples, replace=False)
-                    x_train_subset = x_train_full[indices]
-                    y_train_subset = y_train_full[indices]
+                    # Save raw model outputs
+                    save_model_outputs(
+                        mu_samples=mu_samples,
+                        sigma2_samples=sigma2_samples,
+                        x_grid=x_grid,
+                        y_grid_clean=y_grid_clean,
+                        x_train_subset=x_train_subset,
+                        y_train_subset=y_train_subset,
+                        model_name='MC_Dropout',
+                        noise_type=noise_type,
+                        func_type=func_type,
+                        subfolder='sample_size',
+                        pct=pct,
+                        dropout_p=p,
+                        mc_samples=mc_samples,
+                        date=date
+                    )
                     
-                    # Plot with stored predictions
+                    # Plot variance-based uncertainties
                     plot_uncertainties_no_ood(
                         x_train_subset, y_train_subset, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
-                        title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data",
+                        title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Variance",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Entropy",
                         noise_type=noise_type,
                         func_type=func_type
                     )
@@ -503,8 +721,20 @@ def run_mc_dropout_sample_size_experiment(
                 model = MCDropoutRegressor(p=p)
                 train_model(model, loader, epochs=epochs, lr=lr, loss_type='beta_nll', beta=beta)
                 
-                # Make predictions
-                mu_pred, ale_var, epi_var, tot_var = mc_dropout_predict(model, x_grid, M=mc_samples)
+                # Make predictions with raw arrays for entropy computation
+                result = mc_dropout_predict(model, x_grid, M=mc_samples, return_raw_arrays=True)
+                mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
+                
+                # Compute entropy-based uncertainties
+                if entropy_method == 'analytical':
+                    entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                elif entropy_method == 'numerical':
+                    entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+                else:
+                    raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                ale_entropy = entropy_results['aleatoric']
+                epi_entropy = entropy_results['epistemic']
+                tot_entropy = entropy_results['total']
                 
                 # Compute MSE (handle shape differences)
                 mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
@@ -515,22 +745,61 @@ def run_mc_dropout_sample_size_experiment(
                 uncertainties_by_pct[pct]['ale'].append(ale_var)
                 uncertainties_by_pct[pct]['epi'].append(epi_var)
                 uncertainties_by_pct[pct]['tot'].append(tot_var)
+                uncertainties_entropy_by_pct[pct]['ale'].append(ale_entropy)
+                uncertainties_entropy_by_pct[pct]['epi'].append(epi_entropy)
+                uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                 mse_by_pct[pct].append(mse)
                 
-                # Plot
+                # Save raw model outputs
+                save_model_outputs(
+                    mu_samples=mu_samples,
+                    sigma2_samples=sigma2_samples,
+                    x_grid=x_grid,
+                    y_grid_clean=y_grid_clean,
+                    x_train_subset=x_train_subset,
+                    y_train_subset=y_train_subset,
+                    model_name='MC_Dropout',
+                    noise_type=noise_type,
+                    func_type=func_type,
+                    subfolder='sample_size',
+                    pct=pct,
+                    dropout_p=p,
+                    mc_samples=mc_samples,
+                    date=date
+                )
+                
+                # Plot variance-based uncertainties
                 plot_uncertainties_no_ood(
                     x_train_subset, y_train_subset, x_grid, y_grid_clean,
                     mu_pred, ale_var, epi_var, tot_var,
-                    title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data",
+                    title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Variance",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot entropy-based uncertainties
+                plot_uncertainties_entropy_no_ood(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Entropy",
                     noise_type=noise_type,
                     func_type=func_type
                 )
         
-        # Compute and save statistics
+        # Compute and save variance-based statistics
         compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
-            mse_by_pct=mse_by_pct
+            mse_by_pct=mse_by_pct,
+            date=date, dropout_p=p, mc_samples=mc_samples
+        )
+        
+        # Compute and save entropy-based statistics
+        compute_and_save_statistics_entropy(
+            uncertainties_entropy_by_pct, percentages,
+            function_names[func_type], noise_type, func_type, 'MC_Dropout',
+            mse_by_pct=mse_by_pct,
+            date=date, dropout_p=p, mc_samples=mc_samples
         )
 
 
@@ -546,7 +815,8 @@ def run_deep_ensemble_sample_size_experiment(
     beta: float = 0.5,
     batch_size: int = 32,
     K: int = 5,
-    parallel: bool = True
+    parallel: bool = True,
+    entropy_method: str = 'analytical'
 ):
     """
     Run sample size experiment for Deep Ensemble model.
@@ -587,6 +857,9 @@ def run_deep_ensemble_sample_size_experiment(
     
     function_names = {"linear": "Linear", "sin": "Sinusoidal"}
     
+    # Generate date at the start of the experiment
+    date = datetime.now().strftime('%Y%m%d')
+    
     for func_type in function_types:
         print(f"\n{'#'*80}")
         print(f"# Function Type: {function_names[func_type]} ({func_type}) - Deep Ensemble")
@@ -606,6 +879,7 @@ def run_deep_ensemble_sample_size_experiment(
         
         n_train_full_actual = len(x_train_full)
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
+        uncertainties_entropy_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
         
         # Prepare arguments for parallel execution
@@ -617,7 +891,7 @@ def run_deep_ensemble_sample_size_experiment(
             print(f"Using {'GPU' if use_gpu else 'CPU'} parallelization with {max_workers} workers")
             
             args_list = [(idx, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-                         seed, beta, batch_size, K, func_type, noise_type)
+                         seed, beta, batch_size, K, func_type, noise_type, entropy_method)
                         for idx, pct in enumerate(percentages)]
             
             try:
@@ -628,21 +902,47 @@ def run_deep_ensemble_sample_size_experiment(
                     with ProcessPoolExecutor(max_workers=max_workers) as executor:
                         results = list(executor.map(_train_single_percentage_deep_ensemble, args_list))
                 
-                for pct, mu_pred, ale_var, epi_var, tot_var, mse in results:
+                for result in results:
+                    pct, mu_pred, ale_var, epi_var, tot_var, ale_entropy, epi_entropy, tot_entropy, mse, mu_samples, sigma2_samples, x_train_subset, y_train_subset = result
                     uncertainties_by_pct[pct]['ale'].append(ale_var)
                     uncertainties_by_pct[pct]['epi'].append(epi_var)
                     uncertainties_by_pct[pct]['tot'].append(tot_var)
+                    uncertainties_entropy_by_pct[pct]['ale'].append(ale_entropy)
+                    uncertainties_entropy_by_pct[pct]['epi'].append(epi_entropy)
+                    uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                     mse_by_pct[pct].append(mse)
                     
-                    n_samples = int(n_train_full_actual * pct / 100)
-                    indices = np.random.choice(n_train_full_actual, size=n_samples, replace=False)
-                    x_train_subset = x_train_full[indices]
-                    y_train_subset = y_train_full[indices]
+                    # Save raw model outputs
+                    save_model_outputs(
+                        mu_samples=mu_samples,
+                        sigma2_samples=sigma2_samples,
+                        x_grid=x_grid,
+                        y_grid_clean=y_grid_clean,
+                        x_train_subset=x_train_subset,
+                        y_train_subset=y_train_subset,
+                        model_name='Deep_Ensemble',
+                        noise_type=noise_type,
+                        func_type=func_type,
+                        subfolder='sample_size',
+                        pct=pct,
+                        n_nets=K,
+                        date=date
+                    )
                     
+                    # Plot variance-based uncertainties
                     plot_uncertainties_no_ood(
                         x_train_subset, y_train_subset, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
-                        title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data",
+                        title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Variance",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Entropy",
                         noise_type=noise_type,
                         func_type=func_type
                     )
@@ -675,7 +975,20 @@ def run_deep_ensemble_sample_size_experiment(
                     loss_type='beta_nll', beta=beta, parallel=True
                 )
                 
-                mu_pred, ale_var, epi_var, tot_var = ensemble_predict_deep(ensemble, x_grid_norm)
+                # Make predictions with raw arrays
+                result = ensemble_predict_deep(ensemble, x_grid_norm, return_raw_arrays=True)
+                mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
+                
+                # Compute entropy-based uncertainties
+                if entropy_method == 'analytical':
+                    entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                elif entropy_method == 'numerical':
+                    entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+                else:
+                    raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                ale_entropy = entropy_results['aleatoric']
+                epi_entropy = entropy_results['epistemic']
+                tot_entropy = entropy_results['total']
                 
                 mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                 y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -684,7 +997,27 @@ def run_deep_ensemble_sample_size_experiment(
                 uncertainties_by_pct[pct]['ale'].append(ale_var)
                 uncertainties_by_pct[pct]['epi'].append(epi_var)
                 uncertainties_by_pct[pct]['tot'].append(tot_var)
+                uncertainties_entropy_by_pct[pct]['ale'].append(ale_entropy)
+                uncertainties_entropy_by_pct[pct]['epi'].append(epi_entropy)
+                uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                 mse_by_pct[pct].append(mse)
+                
+                # Save raw model outputs
+                save_model_outputs(
+                    mu_samples=mu_samples,
+                    sigma2_samples=sigma2_samples,
+                    x_grid=x_grid,
+                    y_grid_clean=y_grid_clean,
+                    x_train_subset=x_train_subset,
+                    y_train_subset=y_train_subset,
+                    model_name='Deep_Ensemble',
+                    noise_type=noise_type,
+                    func_type=func_type,
+                    subfolder='sample_size',
+                    pct=pct,
+                    n_nets=K,
+                    date=date
+                )
                 
                 plot_uncertainties_no_ood(
                     x_train_subset, y_train_subset, x_grid, y_grid_clean,
@@ -693,12 +1026,22 @@ def run_deep_ensemble_sample_size_experiment(
                     noise_type=noise_type,
                     func_type=func_type
                 )
+                
+                # Plot entropy-based uncertainties
+                plot_uncertainties_entropy_no_ood(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Entropy",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
         
         # Compute and save statistics
         compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
-            mse_by_pct=mse_by_pct
+            mse_by_pct=mse_by_pct,
+            date=date, n_nets=K
         )
 
 
@@ -716,7 +1059,8 @@ def run_bnn_sample_size_experiment(
     warmup: int = 200,
     samples: int = 200,
     chains: int = 1,
-    parallel: bool = True
+    parallel: bool = True,
+    entropy_method: str = 'analytical'
 ):
     """
     Run sample size experiment for BNN (Bayesian Neural Network) model.
@@ -759,6 +1103,9 @@ def run_bnn_sample_size_experiment(
     
     function_names = {"linear": "Linear", "sin": "Sinusoidal"}
     
+    # Generate date at the start of the experiment
+    date = datetime.now().strftime('%Y%m%d')
+    
     for func_type in function_types:
         print(f"\n{'#'*80}")
         print(f"# Function Type: {function_names[func_type]} ({func_type}) - BNN")
@@ -788,7 +1135,7 @@ def run_bnn_sample_size_experiment(
             print(f"Using {'GPU' if use_gpu else 'CPU'} parallelization with {max_workers} workers")
             
             args_list = [(idx, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-                         seed, hidden_width, weight_scale, warmup, samples, chains, func_type, noise_type)
+                         seed, hidden_width, weight_scale, warmup, samples, chains, func_type, noise_type, entropy_method)
                         for idx, pct in enumerate(percentages)]
             
             try:
@@ -799,16 +1146,28 @@ def run_bnn_sample_size_experiment(
                     with ProcessPoolExecutor(max_workers=max_workers) as executor:
                         results = list(executor.map(_train_single_percentage_bnn, args_list))
                 
-                for pct, mu_pred, ale_var, epi_var, tot_var, mse in results:
+                for result in results:
+                    pct, mu_pred, ale_var, epi_var, tot_var, ale_entropy, epi_entropy, tot_entropy, mse, mu_samples, sigma2_samples, x_train_subset, y_train_subset = result
                     uncertainties_by_pct[pct]['ale'].append(ale_var)
                     uncertainties_by_pct[pct]['epi'].append(epi_var)
                     uncertainties_by_pct[pct]['tot'].append(tot_var)
                     mse_by_pct[pct].append(mse)
                     
-                    n_samples = int(n_train_full_actual * pct / 100)
-                    indices = np.random.choice(n_train_full_actual, size=n_samples, replace=False)
-                    x_train_subset = x_train_full[indices]
-                    y_train_subset = y_train_full[indices]
+                    # Save raw model outputs
+                    save_model_outputs(
+                        mu_samples=mu_samples,
+                        sigma2_samples=sigma2_samples,
+                        x_grid=x_grid,
+                        y_grid_clean=y_grid_clean,
+                        x_train_subset=x_train_subset,
+                        y_train_subset=y_train_subset,
+                        model_name='BNN',
+                        noise_type=noise_type,
+                        func_type=func_type,
+                        subfolder='sample_size',
+                        pct=pct,
+                        date=date
+                    )
                     
                     plot_uncertainties_no_ood(
                         x_train_subset, y_train_subset, x_grid, y_grid_clean,
@@ -845,10 +1204,13 @@ def run_bnn_sample_size_experiment(
                     warmup=warmup, samples=samples, chains=chains, seed=seed
                 )
                 
-                mu_pred, ale_var, epi_var, tot_var = bnn_predict(
+                # Make predictions with raw arrays
+                result = bnn_predict(
                     mcmc, x_grid_norm,
-                    hidden_width=hidden_width, weight_scale=weight_scale
+                    hidden_width=hidden_width, weight_scale=weight_scale,
+                    return_raw_arrays=True
                 )
+                mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                 
                 mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                 y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -858,6 +1220,22 @@ def run_bnn_sample_size_experiment(
                 uncertainties_by_pct[pct]['epi'].append(epi_var)
                 uncertainties_by_pct[pct]['tot'].append(tot_var)
                 mse_by_pct[pct].append(mse)
+                
+                # Save raw model outputs
+                save_model_outputs(
+                    mu_samples=mu_samples,
+                    sigma2_samples=sigma2_samples,
+                    x_grid=x_grid,
+                    y_grid_clean=y_grid_clean,
+                    x_train_subset=x_train_subset,
+                    y_train_subset=y_train_subset,
+                    model_name='BNN',
+                    noise_type=noise_type,
+                    func_type=func_type,
+                    subfolder='sample_size',
+                    pct=pct,
+                    date=date
+                )
                 
                 plot_uncertainties_no_ood(
                     x_train_subset, y_train_subset, x_grid, y_grid_clean,
@@ -871,7 +1249,8 @@ def run_bnn_sample_size_experiment(
         compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'BNN',
-            mse_by_pct=mse_by_pct
+            mse_by_pct=mse_by_pct,
+            date=date
         )
 
 
@@ -888,7 +1267,8 @@ def run_bamlss_sample_size_experiment(
     burnin: int = 2000,
     thin: int = 10,
     nsamples: int = 1000,
-    parallel: bool = True
+    parallel: bool = True,
+    entropy_method: str = 'analytical'
 ):
     """
     Run sample size experiment for BAMLSS model.
@@ -924,6 +1304,9 @@ def run_bamlss_sample_size_experiment(
     
     function_names = {"linear": "Linear", "sin": "Sinusoidal"}
     
+    # Generate date at the start of the experiment
+    date = datetime.now().strftime('%Y%m%d')
+    
     for func_type in function_types:
         print(f"\n{'#'*80}")
         print(f"# Function Type: {function_names[func_type]} ({func_type}) - BAMLSS")
@@ -951,23 +1334,35 @@ def run_bamlss_sample_size_experiment(
             print(f"Using CPU parallelization with {max_workers} workers (BAMLSS is CPU-only)")
             
             args_list = [(idx, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-                         seed, n_iter, burnin, thin, nsamples, func_type, noise_type)
+                         seed, n_iter, burnin, thin, nsamples, func_type, noise_type, entropy_method)
                         for idx, pct in enumerate(percentages)]
             
             try:
                 with ProcessPoolExecutor(max_workers=max_workers) as executor:
                     results = list(executor.map(_train_single_percentage_bamlss, args_list))
                 
-                for pct, mu_pred, ale_var, epi_var, tot_var, mse in results:
+                for result in results:
+                    pct, mu_pred, ale_var, epi_var, tot_var, ale_entropy, epi_entropy, tot_entropy, mse, mu_samples, sigma2_samples, x_train_subset, y_train_subset = result
                     uncertainties_by_pct[pct]['ale'].append(ale_var)
                     uncertainties_by_pct[pct]['epi'].append(epi_var)
                     uncertainties_by_pct[pct]['tot'].append(tot_var)
                     mse_by_pct[pct].append(mse)
                     
-                    n_samples = int(n_train_full_actual * pct / 100)
-                    indices = np.random.choice(n_train_full_actual, size=n_samples, replace=False)
-                    x_train_subset = x_train_full[indices]
-                    y_train_subset = y_train_full[indices]
+                    # Save raw model outputs
+                    save_model_outputs(
+                        mu_samples=mu_samples,
+                        sigma2_samples=sigma2_samples,
+                        x_grid=x_grid,
+                        y_grid_clean=y_grid_clean,
+                        x_train_subset=x_train_subset,
+                        y_train_subset=y_train_subset,
+                        model_name='BAMLSS',
+                        noise_type=noise_type,
+                        func_type=func_type,
+                        subfolder='sample_size',
+                        pct=pct,
+                        date=date
+                    )
                     
                     plot_uncertainties_no_ood(
                         x_train_subset, y_train_subset, x_grid, y_grid_clean,
@@ -994,10 +1389,13 @@ def run_bamlss_sample_size_experiment(
                 x_train_subset = x_train_full[indices]
                 y_train_subset = y_train_full[indices]
                 
-                mu_pred, ale_var, epi_var, tot_var = bamlss_predict(
+                # Make predictions with raw arrays
+                result = bamlss_predict(
                     x_train_subset, y_train_subset, x_grid,
-                    n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples
+                    n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples,
+                    return_raw_arrays=True
                 )
+                mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                 
                 mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                 y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -1007,6 +1405,22 @@ def run_bamlss_sample_size_experiment(
                 uncertainties_by_pct[pct]['epi'].append(epi_var)
                 uncertainties_by_pct[pct]['tot'].append(tot_var)
                 mse_by_pct[pct].append(mse)
+                
+                # Save raw model outputs
+                save_model_outputs(
+                    mu_samples=mu_samples,
+                    sigma2_samples=sigma2_samples,
+                    x_grid=x_grid,
+                    y_grid_clean=y_grid_clean,
+                    x_train_subset=x_train_subset,
+                    y_train_subset=y_train_subset,
+                    model_name='BAMLSS',
+                    noise_type=noise_type,
+                    func_type=func_type,
+                    subfolder='sample_size',
+                    pct=pct,
+                    date=date
+                )
                 
                 plot_uncertainties_no_ood(
                     x_train_subset, y_train_subset, x_grid, y_grid_clean,
@@ -1020,6 +1434,7 @@ def run_bamlss_sample_size_experiment(
         compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
-            mse_by_pct=mse_by_pct
+            mse_by_pct=mse_by_pct,
+            date=date
         )
 

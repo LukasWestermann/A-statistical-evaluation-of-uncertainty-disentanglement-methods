@@ -118,7 +118,7 @@ def normalize_x_data(x, x_mean, x_std):
         return (x - x_mean) / x_std
 
 # ----- MC-Dropout sampling and uncertainty decomposition -----
-def mc_dropout_predict(model, x, M=20, device=None):
+def mc_dropout_predict(model, x, M=20, device=None, return_raw_arrays=False):
     # Keep dropout active at inference by using train() but without gradients
     if device is None:
         device = get_device()
@@ -141,7 +141,10 @@ def mc_dropout_predict(model, x, M=20, device=None):
     epistemic_var = mus.var(axis=0)        # Var[μ] (epistemic)
     total_var = aleatoric_var + epistemic_var
 
-    return mu_pred, aleatoric_var, epistemic_var, total_var
+    if return_raw_arrays:
+        return mu_pred, aleatoric_var, epistemic_var, total_var, (mus, vars_)
+    else:
+        return mu_pred, aleatoric_var, epistemic_var, total_var
 
 # ----- Plotting -----
 def plot_toy_data(x_train, y_train, x_grid, y_clean, title="Toy Regression Data"):
