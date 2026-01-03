@@ -62,7 +62,7 @@ def _ensure_bamlss_installed():
 
 
 def fit_bamlss(x_train, y_train, x_grid, n_iter=12000, burnin=2000, thin=10, 
-               nsamples=1000, k_mu=20, k_sigma=15):
+               nsamples=1000, k_mu=20, k_sigma=15, return_raw_arrays=False):
     """
     Fit Bayesian GAMLSS using bamlss package in R.
     
@@ -404,10 +404,16 @@ def fit_bamlss(x_train, y_train, x_grid, n_iter=12000, burnin=2000, thin=10,
     epi_var = np.var(mu_samps, axis=1)            # Var[μ] - epistemic variance
     tot_var = ale_var + epi_var                   # Total variance
     
-    return mu_mean, ale_var, epi_var, tot_var
+    if return_raw_arrays:
+        # Transpose to [S, N] format for consistency with other models
+        mu_samps_T = mu_samps.T  # [nsamples, n_grid]
+        sigma2_samps_T = (sg_samps ** 2).T  # [nsamples, n_grid]
+        return mu_mean, ale_var, epi_var, tot_var, (mu_samps_T, sigma2_samps_T)
+    else:
+        return mu_mean, ale_var, epi_var, tot_var
 
 
-def bamlss_predict(x_train, y_train, x_grid, **kwargs):
+def bamlss_predict(x_train, y_train, x_grid, return_raw_arrays=False, **kwargs):
     """
     Wrapper function matching the interface of other models.
     Returns predictions compatible with existing plotting functions.
@@ -420,6 +426,8 @@ def bamlss_predict(x_train, y_train, x_grid, **kwargs):
         Training target data
     x_grid : np.ndarray, shape (n_grid, 1) or (n_grid,)
         Grid points for prediction
+    return_raw_arrays : bool, default=False
+        If True, also return raw (mu_samples, sigma2_samples) arrays
     **kwargs : dict
         Additional arguments passed to fit_bamlss (n_iter, burnin, thin, etc.)
     
@@ -433,11 +441,21 @@ def bamlss_predict(x_train, y_train, x_grid, **kwargs):
         Epistemic variance
     tot_var : np.ndarray, shape (n_grid,)
         Total variance
+    (mu_samples, sigma2_samples) : tuple, optional
+        Raw arrays if return_raw_arrays=True
     """
-    mu_pred, ale_var, epi_var, tot_var = fit_bamlss(x_train, y_train, x_grid, **kwargs)
+    result = fit_bamlss(x_train, y_train, x_grid, return_raw_arrays=return_raw_arrays, **kwargs)
+    
+    if return_raw_arrays:
+        mu_pred, ale_var, epi_var, tot_var, raw_arrays = result
+    else:
+        mu_pred, ale_var, epi_var, tot_var = result
     
     # Reshape mu_pred to [N, 1] for consistency with other models
     mu_pred = mu_pred.reshape(-1, 1)
     
-    return mu_pred, ale_var, epi_var, tot_var
+    if return_raw_arrays:
+        return mu_pred, ale_var, epi_var, tot_var, raw_arrays
+    else:
+        return mu_pred, ale_var, epi_var, tot_var
 
