@@ -19,7 +19,7 @@ import multiprocessing
 from datetime import datetime
 
 from utils.results_save import save_summary_statistics_ood, save_summary_statistics_entropy_ood, save_model_outputs
-from utils.plotting import plot_uncertainties_ood, plot_uncertainties_entropy_ood, plot_uncertainties_ood_normalized, plot_uncertainties_entropy_ood_normalized
+from utils.plotting import plot_uncertainties_ood, plot_uncertainties_entropy_ood, plot_uncertainties_ood_normalized, plot_uncertainties_entropy_ood_normalized, plot_entropy_lines_ood
 from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 from utils.device import get_device_for_worker, get_num_gpus
 from utils.metrics import (
@@ -706,12 +706,12 @@ def run_mc_dropout_ood_experiment(
     n_train: int = 1000,
     grid_points: int = 1000,
     seed: int = 42,
-    p: float = 0.2,
+    p: float = 0.25,
     beta: float = 0.5,
-    epochs: int = 250,
+    epochs: int = 500,
     lr: float = 1e-3,
     batch_size: int = 32,
-    mc_samples: int = 20,
+    mc_samples: int = 100,
     parallel: bool = True,
     entropy_method: str = 'analytical'
 ):
@@ -917,6 +917,15 @@ def run_mc_dropout_ood_experiment(
             func_type=func_type
         )
         
+        # Plot entropy lines (in nats)
+        plot_entropy_lines_ood(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask,
+            title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - OOD",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
         # Plot normalized variance-based uncertainties
         plot_uncertainties_ood_normalized(
             x_train, y_train, x_grid, y_grid_clean,
@@ -971,8 +980,8 @@ def run_deep_ensemble_ood_experiment(
     seed: int = 42,
     beta: float = 0.5,
     batch_size: int = 32,
-    K: int = 5,
-    epochs: int = 250,
+    K: int = 20,
+    epochs: int = 500,
     parallel: bool = True,
     entropy_method: str = 'analytical'
 ):
@@ -1174,6 +1183,15 @@ def run_deep_ensemble_ood_experiment(
             x_train, y_train, x_grid, y_grid_clean,
             mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask,
             title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - OOD - Entropy",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
+        # Plot entropy lines (in nats)
+        plot_entropy_lines_ood(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask,
+            title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - OOD",
             noise_type=noise_type,
             func_type=func_type
         )
@@ -1445,6 +1463,15 @@ def run_bnn_ood_experiment(
             func_type=func_type
         )
         
+        # Plot entropy lines (in nats)
+        plot_entropy_lines_ood(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask,
+            title=f"BNN (Pyro NUTS) - {function_names[func_type]} - OOD",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
         # Plot normalized variance-based uncertainties
         plot_uncertainties_ood_normalized(
             x_train, y_train, x_grid, y_grid_clean,
@@ -1690,6 +1717,15 @@ def run_bamlss_ood_experiment(
             x_train, y_train, x_grid, y_grid_clean,
             mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask,
             title=f"BAMLSS - {function_names[func_type]} - OOD - Entropy",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
+        # Plot entropy lines (in nats)
+        plot_entropy_lines_ood(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask,
+            title=f"BAMLSS - {function_names[func_type]} - OOD",
             noise_type=noise_type,
             func_type=func_type
         )

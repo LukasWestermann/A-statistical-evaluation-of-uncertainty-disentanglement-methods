@@ -44,7 +44,7 @@ class BaselineRegressor(nn.Module):
         return mu, var
 
 # ----- Training loop for a single model -----
-def train_single_ensemble(model, loader, epochs=250, lr=1e-3, loss_type='nll', beta=0.5, seed=None):
+def train_single_ensemble(model, loader, epochs=500, lr=1e-3, loss_type='nll', beta=0.5, seed=None):
     if seed is not None:
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -73,7 +73,7 @@ def train_single_ensemble(model, loader, epochs=250, lr=1e-3, loss_type='nll', b
             print(f"[{loss_type}] Epoch {epoch+1}/{epochs} - avg loss {total_loss/len(loader.dataset):.4f}")
 
 # ----- Train an ensemble of K models -----
-def train_ensemble_deep(x_train, y_train, batch_size=32, K=5, loss_type='nll', beta=0.5, parallel=True, epochs=250):
+def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', beta=0.5, parallel=True, epochs=500):
     """
     Train an ensemble of K models.
     

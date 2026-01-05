@@ -18,8 +18,14 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
 
-from utils.results_save import save_summary_statistics, save_summary_statistics_entropy
-from utils.plotting import plot_uncertainties_no_ood, plot_uncertainties_entropy_no_ood
+from utils.results_save import save_summary_statistics, save_summary_statistics_entropy, save_model_outputs
+from utils.plotting import (
+    plot_uncertainties_no_ood, 
+    plot_uncertainties_entropy_no_ood,
+    plot_entropy_lines_no_ood,
+    plot_uncertainties_no_ood_normalized,
+    plot_uncertainties_entropy_no_ood_normalized
+)
 from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 from utils.device import get_device_for_worker, get_num_gpus
 from utils.metrics import (
@@ -632,12 +638,12 @@ def run_mc_dropout_sample_size_experiment(
     train_range: tuple = (10, 30),
     grid_points: int = 600,
     seed: int = 42,
-    p: float = 0.1,
+    p: float = 0.25,
     beta: float = 0.5,
-    epochs: int = 250,
+    epochs: int = 500,
     lr: float = 1e-3,
     batch_size: int = 32,
-    mc_samples: int = 20,
+    mc_samples: int = 100,
     parallel: bool = True,
     entropy_method: str = 'analytical'
 ):
@@ -789,6 +795,33 @@ def run_mc_dropout_sample_size_experiment(
                         noise_type=noise_type,
                         func_type=func_type
                     )
+                    
+                    # Plot entropy lines (in nats)
+                    plot_entropy_lines_no_ood(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot normalized variance-based uncertainties
+                    plot_uncertainties_no_ood_normalized(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Variance",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot normalized entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood_normalized(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Entropy",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
             except Exception as e:
                 print(f"Parallel execution failed: {e}. Falling back to sequential execution.")
                 parallel = False
@@ -899,6 +932,33 @@ def run_mc_dropout_sample_size_experiment(
                     noise_type=noise_type,
                     func_type=func_type
                 )
+                
+                # Plot entropy lines (in nats)
+                plot_entropy_lines_no_ood(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot normalized variance-based uncertainties
+                plot_uncertainties_no_ood_normalized(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_var, epi_var, tot_var,
+                    title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Variance",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot normalized entropy-based uncertainties
+                plot_uncertainties_entropy_no_ood_normalized(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Entropy",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
         
         # Compute and save variance-based statistics
         compute_and_save_statistics(
@@ -931,8 +991,8 @@ def run_deep_ensemble_sample_size_experiment(
     seed: int = 42,
     beta: float = 0.5,
     batch_size: int = 32,
-    K: int = 5,
-    epochs: int = 250,
+    K: int = 20,
+    epochs: int = 500,
     parallel: bool = True,
     entropy_method: str = 'analytical'
 ):
@@ -1088,6 +1148,33 @@ def run_deep_ensemble_sample_size_experiment(
                         noise_type=noise_type,
                         func_type=func_type
                     )
+                    
+                    # Plot entropy lines (in nats)
+                    plot_entropy_lines_no_ood(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot normalized variance-based uncertainties
+                    plot_uncertainties_no_ood_normalized(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Variance",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot normalized entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood_normalized(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Entropy",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
             except Exception as e:
                 print(f"Parallel execution failed: {e}. Falling back to sequential execution.")
                 parallel = False
@@ -1189,6 +1276,33 @@ def run_deep_ensemble_sample_size_experiment(
                 
                 # Plot entropy-based uncertainties
                 plot_uncertainties_entropy_no_ood(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Entropy",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot entropy lines (in nats)
+                plot_entropy_lines_no_ood(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot normalized variance-based uncertainties
+                plot_uncertainties_no_ood_normalized(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_var, epi_var, tot_var,
+                    title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Variance",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot normalized entropy-based uncertainties
+                plot_uncertainties_entropy_no_ood_normalized(
                     x_train_subset, y_train_subset, x_grid, y_grid_clean,
                     mu_pred, ale_entropy, epi_entropy, tot_entropy,
                     title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - {pct}% training data - Entropy",
@@ -1359,6 +1473,42 @@ def run_bnn_sample_size_experiment(
                         noise_type=noise_type,
                         func_type=func_type
                     )
+                    
+                    # Plot entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"BNN (Pyro NUTS) - {function_names[func_type]} - {pct}% training data - Entropy",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot entropy lines (in nats)
+                    plot_entropy_lines_no_ood(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"BNN (Pyro NUTS) - {function_names[func_type]} - {pct}% training data",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot normalized variance-based uncertainties
+                    plot_uncertainties_no_ood_normalized(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        title=f"BNN (Pyro NUTS) - {function_names[func_type]} - {pct}% training data - Variance",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot normalized entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood_normalized(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"BNN (Pyro NUTS) - {function_names[func_type]} - {pct}% training data - Entropy",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
             except Exception as e:
                 print(f"Parallel execution failed: {e}. Falling back to sequential execution.")
                 parallel = False
@@ -1395,6 +1545,17 @@ def run_bnn_sample_size_experiment(
                 )
                 mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                 
+                # Compute entropy-based uncertainties
+                if entropy_method == 'analytical':
+                    entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                elif entropy_method == 'numerical':
+                    entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+                else:
+                    raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                ale_entropy = entropy_results['aleatoric']
+                epi_entropy = entropy_results['epistemic']
+                tot_entropy = entropy_results['total']
+                
                 mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                 y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
                 mse = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
@@ -1424,6 +1585,42 @@ def run_bnn_sample_size_experiment(
                     x_train_subset, y_train_subset, x_grid, y_grid_clean,
                     mu_pred, ale_var, epi_var, tot_var,
                     title=f"BNN (Pyro NUTS) - {function_names[func_type]} - {pct}% training data",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot entropy-based uncertainties
+                plot_uncertainties_entropy_no_ood(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"BNN (Pyro NUTS) - {function_names[func_type]} - {pct}% training data - Entropy",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot entropy lines (in nats)
+                plot_entropy_lines_no_ood(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"BNN (Pyro NUTS) - {function_names[func_type]} - {pct}% training data",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot normalized variance-based uncertainties
+                plot_uncertainties_no_ood_normalized(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_var, epi_var, tot_var,
+                    title=f"BNN (Pyro NUTS) - {function_names[func_type]} - {pct}% training data - Variance",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot normalized entropy-based uncertainties
+                plot_uncertainties_entropy_no_ood_normalized(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"BNN (Pyro NUTS) - {function_names[func_type]} - {pct}% training data - Entropy",
                     noise_type=noise_type,
                     func_type=func_type
                 )
@@ -1581,6 +1778,42 @@ def run_bamlss_sample_size_experiment(
                         noise_type=noise_type,
                         func_type=func_type
                     )
+                    
+                    # Plot entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"BAMLSS - {function_names[func_type]} - {pct}% training data - Entropy",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot entropy lines (in nats)
+                    plot_entropy_lines_no_ood(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"BAMLSS - {function_names[func_type]} - {pct}% training data",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot normalized variance-based uncertainties
+                    plot_uncertainties_no_ood_normalized(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        title=f"BAMLSS - {function_names[func_type]} - {pct}% training data - Variance",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot normalized entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood_normalized(
+                        x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"BAMLSS - {function_names[func_type]} - {pct}% training data - Entropy",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
             except Exception as e:
                 print(f"Parallel execution failed: {e}. Falling back to sequential execution.")
                 parallel = False
@@ -1606,6 +1839,17 @@ def run_bamlss_sample_size_experiment(
                     return_raw_arrays=True
                 )
                 mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
+                
+                # Compute entropy-based uncertainties
+                if entropy_method == 'analytical':
+                    entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                elif entropy_method == 'numerical':
+                    entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+                else:
+                    raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                ale_entropy = entropy_results['aleatoric']
+                epi_entropy = entropy_results['epistemic']
+                tot_entropy = entropy_results['total']
                 
                 mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                 y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -1654,6 +1898,42 @@ def run_bamlss_sample_size_experiment(
                     x_train_subset, y_train_subset, x_grid, y_grid_clean,
                     mu_pred, ale_var, epi_var, tot_var,
                     title=f"BAMLSS - {function_names[func_type]} - {pct}% training data",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot entropy-based uncertainties
+                plot_uncertainties_entropy_no_ood(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"BAMLSS - {function_names[func_type]} - {pct}% training data - Entropy",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot entropy lines (in nats)
+                plot_entropy_lines_no_ood(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"BAMLSS - {function_names[func_type]} - {pct}% training data",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot normalized variance-based uncertainties
+                plot_uncertainties_no_ood_normalized(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_var, epi_var, tot_var,
+                    title=f"BAMLSS - {function_names[func_type]} - {pct}% training data - Variance",
+                    noise_type=noise_type,
+                    func_type=func_type
+                )
+                
+                # Plot normalized entropy-based uncertainties
+                plot_uncertainties_entropy_no_ood_normalized(
+                    x_train_subset, y_train_subset, x_grid, y_grid_clean,
+                    mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                    title=f"BAMLSS - {function_names[func_type]} - {pct}% training data - Entropy",
                     noise_type=noise_type,
                     func_type=func_type
                 )

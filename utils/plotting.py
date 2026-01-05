@@ -3,6 +3,13 @@ import numpy as np
 import pandas as pd
 from utils.results_save import save_plot
 
+# Try to import IPython display for better notebook support
+try:
+    from IPython.display import display
+    _ipython_available = True
+except ImportError:
+    _ipython_available = False
+
 
 def plot_toy_data(x_train, y_train, x_grid, y_clean, title="Toy Regression Data", save_plot_file=True):
     """Plot the training data and clean function"""
@@ -1481,6 +1488,345 @@ def plot_entropy_lines_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_entro
     plt.close(fig)
 
 
+def plot_entropy_lines_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, title, noise_type='heteroscedastic', func_type=''):
+    """Plot entropy values directly as line plots (in nats) without OOD regions
+    
+    Shows entropy values on y-axis, separate from predictive mean.
+    Useful for understanding actual entropy magnitudes in nats.
+    
+    Args:
+        x_train_subset: Training data x values
+        y_train_subset: Training data y values
+        x_grid: Grid x values for evaluation
+        y_clean: Clean function values at grid points
+        mu_pred: Predictive mean
+        ale_entropy: Aleatoric entropy (nats)
+        epi_entropy: Epistemic entropy (nats)
+        tot_entropy: Total entropy (nats)
+        title: Plot title
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        func_type: Function type identifier (e.g., 'linear', 'sin')
+    """
+    fig, axes = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
+    x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
+    
+    # Ensure arrays are 1D for plotting
+    if mu_pred.ndim > 1:
+        mu_pred = mu_pred.squeeze()
+    if ale_entropy.ndim > 1:
+        ale_entropy = ale_entropy.squeeze()
+    if epi_entropy.ndim > 1:
+        epi_entropy = epi_entropy.squeeze()
+    if tot_entropy.ndim > 1:
+        tot_entropy = tot_entropy.squeeze()
+    
+    # Prepare clean function values
+    y_clean_flat = y_clean[:, 0] if y_clean.ndim > 1 else y_clean
+    
+    # Plot 0: Total entropy as line plot
+    axes[0].scatter(x_train_subset[:, 0] if x_train_subset.ndim > 1 else x_train_subset, 
+                   y_train_subset[:, 0] if y_train_subset.ndim > 1 else y_train_subset, 
+                   alpha=0.1, s=10, color='blue', label="Training data", zorder=3)
+    
+    # Plot predictive mean on primary y-axis
+    ax1_twin = axes[0].twinx()
+    axes[0].plot(x, mu_pred, 'b-', linewidth=1.2, label="Predictive mean", alpha=0.5)
+    
+    # Plot entropy on secondary y-axis
+    ax1_twin.plot(x, tot_entropy, 'g-', linewidth=2, label="Total entropy (nats)")
+    
+    axes[0].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[0].set_ylabel("y / Predictive mean", fontsize=11)
+    ax1_twin.set_ylabel("Entropy (nats)", fontsize=11, color='green')
+    ax1_twin.tick_params(axis='y', labelcolor='green')
+    axes[0].set_title(f"{title} ({noise_type.capitalize()}): Total Entropy (nats)")
+    axes[0].legend(loc="upper left")
+    ax1_twin.legend(loc="upper right")
+    axes[0].grid(True, alpha=0.3)
+    
+    # Plot 1: Aleatoric entropy as line plot
+    axes[1].scatter(x_train_subset[:, 0] if x_train_subset.ndim > 1 else x_train_subset, 
+                   y_train_subset[:, 0] if y_train_subset.ndim > 1 else y_train_subset, 
+                   alpha=0.1, s=10, color='blue', label="Training data", zorder=3)
+    
+    # Plot predictive mean on primary y-axis
+    ax2_twin = axes[1].twinx()
+    axes[1].plot(x, mu_pred, 'b-', linewidth=1.2, label="Predictive mean", alpha=0.5)
+    
+    # Plot entropy on secondary y-axis
+    ax2_twin.plot(x, ale_entropy, 'g-', linewidth=2, label="Aleatoric entropy (nats)")
+    
+    axes[1].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[1].set_ylabel("y / Predictive mean", fontsize=11)
+    ax2_twin.set_ylabel("Entropy (nats)", fontsize=11, color='green')
+    ax2_twin.tick_params(axis='y', labelcolor='green')
+    axes[1].set_title(f"{title} ({noise_type.capitalize()}): Aleatoric Entropy (nats)")
+    axes[1].legend(loc="upper left")
+    ax2_twin.legend(loc="upper right")
+    axes[1].grid(True, alpha=0.3)
+    
+    # Plot 2: Epistemic entropy as line plot
+    axes[2].scatter(x_train_subset[:, 0] if x_train_subset.ndim > 1 else x_train_subset, 
+                   y_train_subset[:, 0] if y_train_subset.ndim > 1 else y_train_subset, 
+                   alpha=0.1, s=10, color='blue', label="Training data", zorder=3)
+    
+    # Plot predictive mean on primary y-axis
+    ax3_twin = axes[2].twinx()
+    axes[2].plot(x, mu_pred, 'b-', linewidth=1.2, label="Predictive mean", alpha=0.5)
+    
+    # Plot entropy on secondary y-axis
+    ax3_twin.plot(x, epi_entropy, 'r-', linewidth=2, label="Epistemic entropy (nats)")
+    
+    axes[2].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[2].set_ylabel("y / Predictive mean", fontsize=11)
+    axes[2].set_xlabel("x", fontsize=11)
+    ax3_twin.set_ylabel("Entropy (nats)", fontsize=11, color='red')
+    ax3_twin.tick_params(axis='y', labelcolor='red')
+    axes[2].set_title(f"{title} ({noise_type.capitalize()}): Epistemic Entropy (nats)")
+    axes[2].legend(loc="upper left")
+    ax3_twin.legend(loc="upper right")
+    axes[2].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot with organized folder structure
+    subfolder = f"uncertainties_entropy_lines_no_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_lines_no_ood/{noise_type}"
+    save_plot(fig, f"{title}_entropy_lines", subfolder=subfolder)
+    
+    # Display plot in notebook
+    if _ipython_available:
+        display(fig)
+    plt.show()
+    plt.close(fig)
+
+
+def plot_uncertainties_no_ood_normalized(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3):
+    """Plot normalized variance-based uncertainties without OOD regions
+    
+    Args:
+        x_train_subset: Training data x values
+        y_train_subset: Training data y values
+        x_grid: Grid x values for evaluation
+        y_clean: Clean function values at grid points
+        mu_pred: Predictive mean
+        ale_var: Aleatoric uncertainty variance
+        epi_var: Epistemic uncertainty variance
+        tot_var: Total uncertainty variance
+        title: Plot title
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        func_type: Function type identifier (e.g., 'linear', 'sin')
+        scale_factor: Scaling factor for normalized bands (default 0.3)
+    """
+    fig, axes = plt.subplots(3, 1, figsize=(12, 16), sharex=True)
+    x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
+    
+    # Ensure mu_pred is 1D for plotting
+    if mu_pred.ndim > 1:
+        mu_pred = mu_pred.squeeze()
+    if ale_var.ndim > 1:
+        ale_var = ale_var.squeeze()
+    if epi_var.ndim > 1:
+        epi_var = epi_var.squeeze()
+    if tot_var.ndim > 1:
+        tot_var = tot_var.squeeze()
+    
+    # Prepare clean function values
+    y_clean_flat = y_clean[:, 0] if y_clean.ndim > 1 else y_clean
+    
+    # Compute y-axis range
+    y_range = y_clean_flat.max() - y_clean_flat.min()
+    
+    # Convert variance to standard deviation and normalize ale and epi separately
+    std_ale = np.sqrt(ale_var)
+    std_epi = np.sqrt(epi_var)
+    
+    # Normalize ale and epi separately
+    std_ale_norm = _normalize_values(std_ale)
+    std_epi_norm = _normalize_values(std_epi)
+    
+    # Total is sum of normalized ale and epi
+    std_tot_norm = std_ale_norm + std_epi_norm
+    
+    # Scale normalized values to y-axis range
+    band_width_tot = std_tot_norm * y_range * scale_factor
+    band_width_ale = std_ale_norm * y_range * scale_factor
+    band_width_epi = std_epi_norm * y_range * scale_factor
+    
+    # Plot 1: Predictive mean + Total uncertainty (normalized)
+    axes[0].scatter(x_train_subset[:, 0] if x_train_subset.ndim > 1 else x_train_subset, 
+                   y_train_subset[:, 0] if y_train_subset.ndim > 1 else y_train_subset, 
+                   alpha=0.1, s=10, color='blue', label="Training data", zorder=3)
+    
+    axes[0].plot(x, mu_pred, 'b-', linewidth=1.2, label="Predictive mean")
+    axes[0].fill_between(x, mu_pred - band_width_tot, mu_pred + band_width_tot, 
+                        alpha=0.3, color='blue', label="±norm(total)")
+    
+    axes[0].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[0].set_ylabel("y")
+    axes[0].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Total Uncertainty (Normalized)")
+    axes[0].legend(loc="upper left")
+    axes[0].grid(True, alpha=0.3)
+    
+    # Plot 2: Predictive mean + Aleatoric uncertainty (normalized)
+    axes[1].scatter(x_train_subset[:, 0] if x_train_subset.ndim > 1 else x_train_subset, 
+                   y_train_subset[:, 0] if y_train_subset.ndim > 1 else y_train_subset, 
+                   alpha=0.1, s=10, color='blue', label="Training data", zorder=3)
+    
+    axes[1].plot(x, mu_pred, 'b-', linewidth=1.2, label="Predictive mean")
+    axes[1].fill_between(x, mu_pred - band_width_ale, mu_pred + band_width_ale, 
+                        alpha=0.3, color='green', label="±norm(aleatoric)")
+    
+    axes[1].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[1].set_ylabel("y")
+    axes[1].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Aleatoric Uncertainty (Normalized)")
+    axes[1].legend(loc="upper left")
+    axes[1].grid(True, alpha=0.3)
+    
+    # Plot 3: Predictive mean + Epistemic uncertainty (normalized)
+    axes[2].scatter(x_train_subset[:, 0] if x_train_subset.ndim > 1 else x_train_subset, 
+                   y_train_subset[:, 0] if y_train_subset.ndim > 1 else y_train_subset, 
+                   alpha=0.1, s=10, color='blue', label="Training data", zorder=3)
+    
+    axes[2].plot(x, mu_pred, 'b-', linewidth=1.2, label="Predictive mean")
+    axes[2].fill_between(x, mu_pred - band_width_epi, mu_pred + band_width_epi, 
+                        alpha=0.3, color='red', label="±norm(epistemic)")
+    
+    axes[2].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[2].set_ylabel("y")
+    axes[2].set_xlabel("x")
+    axes[2].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Epistemic Uncertainty (Normalized)")
+    axes[2].legend(loc="upper left")
+    axes[2].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot with organized folder structure
+    subfolder = f"uncertainties_no_ood_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_no_ood_normalized/{noise_type}"
+    save_plot(fig, f"{title}_normalized", subfolder=subfolder)
+    
+    # Display plot in notebook
+    if _ipython_available:
+        display(fig)
+    plt.show()
+    plt.close(fig)
+
+
+def plot_uncertainties_entropy_no_ood_normalized(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3):
+    """Plot normalized entropy-based uncertainties without OOD regions
+    
+    Args:
+        x_train_subset: Training data x values
+        y_train_subset: Training data y values
+        x_grid: Grid x values for evaluation
+        y_clean: Clean function values at grid points
+        mu_pred: Predictive mean
+        ale_entropy: Aleatoric entropy (nats)
+        epi_entropy: Epistemic entropy (nats)
+        tot_entropy: Total entropy (nats)
+        title: Plot title
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        func_type: Function type identifier (e.g., 'linear', 'sin')
+        scale_factor: Scaling factor for normalized bands (default 0.3)
+    """
+    fig, axes = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
+    x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
+    
+    # Ensure arrays are 1D for plotting
+    if mu_pred.ndim > 1:
+        mu_pred = mu_pred.squeeze()
+    if ale_entropy.ndim > 1:
+        ale_entropy = ale_entropy.squeeze()
+    if epi_entropy.ndim > 1:
+        epi_entropy = epi_entropy.squeeze()
+    if tot_entropy.ndim > 1:
+        tot_entropy = tot_entropy.squeeze()
+    
+    # Prepare clean function values
+    y_clean_flat = y_clean[:, 0] if y_clean.ndim > 1 else y_clean
+    
+    # Compute y-axis range
+    y_range = y_clean_flat.max() - y_clean_flat.min()
+    
+    # Normalize ale and epi entropy separately
+    ale_entropy_norm = _normalize_values(ale_entropy)
+    epi_entropy_norm = _normalize_values(epi_entropy)
+    
+    # Total is sum of normalized ale and epi
+    tot_entropy_norm = ale_entropy_norm + epi_entropy_norm
+    
+    # Scale normalized values to y-axis range
+    band_width_tot = tot_entropy_norm * y_range * scale_factor
+    band_width_ale = ale_entropy_norm * y_range * scale_factor
+    band_width_epi = epi_entropy_norm * y_range * scale_factor
+    
+    # Plot 0: Predictive mean + Total entropy (normalized)
+    axes[0].scatter(x_train_subset[:, 0] if x_train_subset.ndim > 1 else x_train_subset, 
+                   y_train_subset[:, 0] if y_train_subset.ndim > 1 else y_train_subset, 
+                   alpha=0.1, s=10, color='blue', label="Training data", zorder=3)
+    
+    axes[0].plot(x, mu_pred, 'b-', linewidth=1.2, label="Predictive mean")
+    axes[0].fill_between(x, mu_pred - band_width_tot, mu_pred + band_width_tot, 
+                        alpha=0.3, color='blue', label="±norm(entropy, total)")
+    
+    axes[0].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[0].set_ylabel("y")
+    axes[0].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Total Entropy (Normalized)")
+    axes[0].legend(loc="upper left")
+    axes[0].grid(True, alpha=0.3)
+    
+    # Plot 1: Predictive mean + Aleatoric entropy (normalized)
+    axes[1].scatter(x_train_subset[:, 0] if x_train_subset.ndim > 1 else x_train_subset, 
+                   y_train_subset[:, 0] if y_train_subset.ndim > 1 else y_train_subset, 
+                   alpha=0.1, s=10, color='blue', label="Training data", zorder=3)
+    
+    axes[1].plot(x, mu_pred, 'b-', linewidth=1.2, label="Predictive mean")
+    axes[1].fill_between(x, mu_pred - band_width_ale, mu_pred + band_width_ale, 
+                        alpha=0.3, color='green', label="±norm(entropy, aleatoric)")
+    
+    axes[1].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[1].set_ylabel("y")
+    axes[1].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Aleatoric Entropy (Normalized)")
+    axes[1].legend(loc="upper left")
+    axes[1].grid(True, alpha=0.3)
+    
+    # Plot 2: Predictive mean + Epistemic entropy (normalized)
+    axes[2].scatter(x_train_subset[:, 0] if x_train_subset.ndim > 1 else x_train_subset, 
+                   y_train_subset[:, 0] if y_train_subset.ndim > 1 else y_train_subset, 
+                   alpha=0.1, s=10, color='blue', label="Training data", zorder=3)
+    
+    axes[2].plot(x, mu_pred, 'b-', linewidth=1.2, label="Predictive mean")
+    axes[2].fill_between(x, mu_pred - band_width_epi, mu_pred + band_width_epi, 
+                        alpha=0.3, color='red', label="±norm(entropy, epistemic)")
+    
+    axes[2].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[2].set_ylabel("y")
+    axes[2].set_xlabel("x")
+    axes[2].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Epistemic Entropy (Normalized)")
+    axes[2].legend(loc="upper left")
+    axes[2].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot with organized folder structure
+    subfolder = f"uncertainties_entropy_no_ood_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_no_ood_normalized/{noise_type}"
+    save_plot(fig, f"{title}_entropy_normalized", subfolder=subfolder)
+    
+    # Display plot in notebook
+    if _ipython_available:
+        display(fig)
+    plt.show()
+    plt.close(fig)
+
+
 def plot_uncertainties_entropy_undersampling(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy,
                                             region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type=''):
     """Plot entropy-based uncertainties with different sampling regions highlighted
@@ -1642,5 +1988,538 @@ def plot_uncertainties_entropy_undersampling(x_train, y_train, x_grid, y_clean, 
     subfolder = f"uncertainties_entropy_undersampling/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_undersampling/{noise_type}"
     save_plot(fig, f"{title}_entropy", subfolder=subfolder)
     
+    # Display plot in notebook
+    if _ipython_available:
+        display(fig)
+    plt.show()
+    plt.close(fig)
+
+
+def plot_entropy_lines_undersampling(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                                     region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type=''):
+    """Plot entropy values directly as line plots (in nats) with undersampling regions highlighted
+    
+    Shows entropy values on y-axis, separate from predictive mean.
+    Useful for understanding actual entropy magnitudes in nats.
+    
+    Args:
+        x_train: Training data x values
+        y_train: Training data y values
+        x_grid: Grid x values for evaluation
+        y_clean: Clean function values at grid points
+        mu_pred: Predictive mean
+        ale_entropy: Aleatoric entropy (nats)
+        epi_entropy: Epistemic entropy (nats)
+        tot_entropy: Total entropy (nats)
+        region_masks: List of boolean masks, one for each region
+        sampling_regions: List of tuples (region_tuple, density_factor)
+        title: Plot title
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        func_type: Function type identifier (e.g., 'linear', 'sin')
+    """
+    fig, axes = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
+    x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
+    
+    # Ensure arrays are 1D for plotting
+    if mu_pred.ndim > 1:
+        mu_pred = mu_pred.squeeze()
+    if ale_entropy.ndim > 1:
+        ale_entropy = ale_entropy.squeeze()
+    if epi_entropy.ndim > 1:
+        epi_entropy = epi_entropy.squeeze()
+    if tot_entropy.ndim > 1:
+        tot_entropy = tot_entropy.squeeze()
+    
+    # Prepare clean function values
+    y_clean_flat = y_clean[:, 0] if y_clean.ndim > 1 else y_clean
+    
+    # Define colors for different regions
+    colors = ['blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive']
+    
+    # Prepare training data
+    x_train_flat = x_train[:, 0] if x_train.ndim > 1 else x_train
+    y_train_flat = y_train[:, 0] if y_train.ndim > 1 else y_train
+    
+    # Plot training data in ALL three graphs
+    for ax in axes:
+        for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+            if region_tuple is not None:
+                region_mask_train = (x_train_flat >= region_tuple[0]) & (x_train_flat <= region_tuple[1])
+            else:
+                region_mask_train = region_masks[idx] if idx < len(region_masks) else np.ones(len(x_train_flat), dtype=bool)
+            color = colors[idx % len(colors)]
+            alpha = 0.3 if density_factor < 0.5 else 0.6
+            label = "Training data" if idx == 0 else None
+            ax.scatter(x_train_flat[region_mask_train], y_train_flat[region_mask_train], 
+                      alpha=alpha, s=10, color=color, label=label, zorder=3)
+    
+    # Add vertical lines for region boundaries
+    for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+        for ax in axes:
+            ax.axvline(x=region_tuple[0], color='gray', linestyle=':', linewidth=1, alpha=0.5)
+            ax.axvline(x=region_tuple[1], color='gray', linestyle=':', linewidth=1, alpha=0.5)
+    
+    # Plot predictive mean on primary y-axis and entropy on secondary y-axis for each region
+    pred_mean_plotted = False
+    
+    # Plot 0: Total entropy
+    ax1_twin = axes[0].twinx()
+    for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+        region_mask = region_masks[idx]
+        color = colors[idx % len(colors)]
+        linestyle = '--' if density_factor < 0.5 else '-'
+        linewidth = 1.5 if density_factor < 0.5 else 2
+        
+        if not pred_mean_plotted:
+            axes[0].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, label="Predictive mean", alpha=0.5)
+            ax1_twin.plot(x[region_mask], tot_entropy[region_mask], linestyle=linestyle, 
+                         linewidth=2, color=color, label="Total entropy (nats)")
+            pred_mean_plotted = True
+        else:
+            axes[0].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, alpha=0.5)
+            ax1_twin.plot(x[region_mask], tot_entropy[region_mask], linestyle=linestyle, 
+                         linewidth=2, color=color)
+    
+    axes[0].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[0].set_ylabel("y / Predictive mean", fontsize=11)
+    ax1_twin.set_ylabel("Entropy (nats)", fontsize=11, color='green')
+    ax1_twin.tick_params(axis='y', labelcolor='green')
+    axes[0].set_title(f"{title} ({noise_type.capitalize()}): Total Entropy (nats)")
+    axes[0].legend(loc="upper left")
+    ax1_twin.legend(loc="upper right")
+    axes[0].grid(True, alpha=0.3)
+    
+    # Plot 1: Aleatoric entropy
+    ax2_twin = axes[1].twinx()
+    pred_mean_plotted = False
+    for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+        region_mask = region_masks[idx]
+        color = colors[idx % len(colors)]
+        linestyle = '--' if density_factor < 0.5 else '-'
+        linewidth = 1.5 if density_factor < 0.5 else 2
+        
+        if idx == 0:
+            axes[1].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, label="Predictive mean", alpha=0.5)
+            ax2_twin.plot(x[region_mask], ale_entropy[region_mask], linestyle=linestyle, 
+                         linewidth=2, color=color, label="Aleatoric entropy (nats)")
+        else:
+            axes[1].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, alpha=0.5)
+            ax2_twin.plot(x[region_mask], ale_entropy[region_mask], linestyle=linestyle, 
+                         linewidth=2, color=color)
+    
+    axes[1].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[1].set_ylabel("y / Predictive mean", fontsize=11)
+    ax2_twin.set_ylabel("Entropy (nats)", fontsize=11, color='green')
+    ax2_twin.tick_params(axis='y', labelcolor='green')
+    axes[1].set_title(f"{title} ({noise_type.capitalize()}): Aleatoric Entropy (nats)")
+    axes[1].legend(loc="upper left")
+    ax2_twin.legend(loc="upper right")
+    axes[1].grid(True, alpha=0.3)
+    
+    # Plot 2: Epistemic entropy
+    ax3_twin = axes[2].twinx()
+    for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+        region_mask = region_masks[idx]
+        color = colors[idx % len(colors)]
+        linestyle = '--' if density_factor < 0.5 else '-'
+        linewidth = 1.5 if density_factor < 0.5 else 2
+        
+        if idx == 0:
+            axes[2].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, label="Predictive mean", alpha=0.5)
+            ax3_twin.plot(x[region_mask], epi_entropy[region_mask], linestyle=linestyle, 
+                         linewidth=2, color=color, label="Epistemic entropy (nats)")
+        else:
+            axes[2].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, alpha=0.5)
+            ax3_twin.plot(x[region_mask], epi_entropy[region_mask], linestyle=linestyle, 
+                         linewidth=2, color=color)
+    
+    axes[2].plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    axes[2].set_ylabel("y / Predictive mean", fontsize=11)
+    axes[2].set_xlabel("x", fontsize=11)
+    ax3_twin.set_ylabel("Entropy (nats)", fontsize=11, color='red')
+    ax3_twin.tick_params(axis='y', labelcolor='red')
+    axes[2].set_title(f"{title} ({noise_type.capitalize()}): Epistemic Entropy (nats)")
+    axes[2].legend(loc="upper left")
+    ax3_twin.legend(loc="upper right")
+    axes[2].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot with organized folder structure
+    subfolder = f"uncertainties_entropy_lines_undersampling/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_lines_undersampling/{noise_type}"
+    save_plot(fig, f"{title}_entropy_lines", subfolder=subfolder)
+    
+    # Display plot in notebook
+    if _ipython_available:
+        display(fig)
+    plt.show()
+    plt.close(fig)
+
+
+def plot_uncertainties_undersampling_normalized(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var,
+                                                region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3):
+    """Plot normalized variance-based uncertainties with undersampling regions highlighted
+    
+    Args:
+        x_train: Training data x values
+        y_train: Training data y values
+        x_grid: Grid x values for evaluation
+        y_clean: Clean function values at grid points
+        mu_pred: Predictive mean
+        ale_var: Aleatoric uncertainty variance
+        epi_var: Epistemic uncertainty variance
+        tot_var: Total uncertainty variance
+        region_masks: List of boolean masks, one for each region
+        sampling_regions: List of tuples (region_tuple, density_factor)
+        title: Plot title
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        func_type: Function type identifier (e.g., 'linear', 'sin')
+        scale_factor: Scaling factor for normalized bands (default 0.3)
+    """
+    fig, axes = plt.subplots(3, 1, figsize=(12, 16), sharex=True)
+    x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
+    
+    # Ensure mu_pred is 1D for plotting
+    if mu_pred.ndim > 1:
+        mu_pred = mu_pred.squeeze()
+    if ale_var.ndim > 1:
+        ale_var = ale_var.squeeze()
+    if epi_var.ndim > 1:
+        epi_var = epi_var.squeeze()
+    if tot_var.ndim > 1:
+        tot_var = tot_var.squeeze()
+    
+    # Prepare clean function values
+    y_clean_flat = y_clean[:, 0] if y_clean.ndim > 1 else y_clean
+    
+    # Compute y-axis range
+    y_range = y_clean_flat.max() - y_clean_flat.min()
+    
+    # Convert variance to standard deviation and normalize ale and epi separately
+    std_ale = np.sqrt(ale_var)
+    std_epi = np.sqrt(epi_var)
+    
+    # Normalize ale and epi separately
+    std_ale_norm = _normalize_values(std_ale)
+    std_epi_norm = _normalize_values(std_epi)
+    
+    # Total is sum of normalized ale and epi
+    std_tot_norm = std_ale_norm + std_epi_norm
+    
+    # Scale normalized values to y-axis range
+    band_width_tot = std_tot_norm * y_range * scale_factor
+    band_width_ale = std_ale_norm * y_range * scale_factor
+    band_width_epi = std_epi_norm * y_range * scale_factor
+    
+    # Define colors for different regions
+    colors = ['blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive']
+    
+    # Prepare training data
+    x_train_flat = x_train[:, 0] if x_train.ndim > 1 else x_train
+    y_train_flat = y_train[:, 0] if y_train.ndim > 1 else y_train
+    
+    # Plot training data in ALL three graphs
+    for ax in axes:
+        for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+            if region_tuple is not None:
+                region_mask_train = (x_train_flat >= region_tuple[0]) & (x_train_flat <= region_tuple[1])
+            else:
+                region_mask_train = region_masks[idx] if idx < len(region_masks) else np.ones(len(x_train_flat), dtype=bool)
+            color = colors[idx % len(colors)]
+            alpha = 0.3 if density_factor < 0.5 else 0.6
+            label = "Training data" if idx == 0 else None
+            ax.scatter(x_train_flat[region_mask_train], y_train_flat[region_mask_train], 
+                      alpha=alpha, s=10, color=color, label=label, zorder=3)
+    
+    # Add vertical lines for region boundaries
+    for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+        for ax in axes:
+            ax.axvline(x=region_tuple[0], color='gray', linestyle=':', linewidth=1, alpha=0.5)
+            ax.axvline(x=region_tuple[1], color='gray', linestyle=':', linewidth=1, alpha=0.5)
+    
+    # Plot predictive mean and uncertainties for each region
+    pred_mean_plotted = False
+    tot_unc_plotted = False
+    ale_unc_plotted = False
+    epi_unc_plotted = False
+    
+    for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+        region_mask = region_masks[idx]
+        color = colors[idx % len(colors)]
+        linestyle = '--' if density_factor < 0.5 else '-'
+        linewidth = 1.5 if density_factor < 0.5 else 2
+        
+        # Plot 0: Total uncertainty (normalized)
+        if not pred_mean_plotted:
+            axes[0].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, label="Predictive mean")
+            pred_mean_plotted = True
+        else:
+            axes[0].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color)
+        
+        if not tot_unc_plotted:
+            axes[0].fill_between(x[region_mask], mu_pred[region_mask] - band_width_tot[region_mask], 
+                                mu_pred[region_mask] + band_width_tot[region_mask], 
+                                alpha=0.3, color=color, label="±norm(total)")
+            tot_unc_plotted = True
+        else:
+            axes[0].fill_between(x[region_mask], mu_pred[region_mask] - band_width_tot[region_mask], 
+                                mu_pred[region_mask] + band_width_tot[region_mask], 
+                                alpha=0.3, color=color)
+        
+        # Plot 1: Aleatoric uncertainty (normalized)
+        if idx == 0:
+            axes[1].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, label="Predictive mean")
+        else:
+            axes[1].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color)
+        
+        if not ale_unc_plotted:
+            axes[1].fill_between(x[region_mask], mu_pred[region_mask] - band_width_ale[region_mask], 
+                                mu_pred[region_mask] + band_width_ale[region_mask], 
+                                alpha=0.3, color=color, label="±norm(aleatoric)")
+            ale_unc_plotted = True
+        else:
+            axes[1].fill_between(x[region_mask], mu_pred[region_mask] - band_width_ale[region_mask], 
+                                mu_pred[region_mask] + band_width_ale[region_mask], 
+                                alpha=0.3, color=color)
+        
+        # Plot 2: Epistemic uncertainty (normalized)
+        if idx == 0:
+            axes[2].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, label="Predictive mean")
+        else:
+            axes[2].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color)
+        
+        if not epi_unc_plotted:
+            axes[2].fill_between(x[region_mask], mu_pred[region_mask] - band_width_epi[region_mask], 
+                                mu_pred[region_mask] + band_width_epi[region_mask], 
+                                alpha=0.3, color=color, label="±norm(epistemic)")
+            epi_unc_plotted = True
+        else:
+            axes[2].fill_between(x[region_mask], mu_pred[region_mask] - band_width_epi[region_mask], 
+                                mu_pred[region_mask] + band_width_epi[region_mask], 
+                                alpha=0.3, color=color)
+    
+    # Plot clean function
+    for ax in axes:
+        ax.plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    # Set labels and titles
+    axes[0].set_ylabel("y")
+    axes[0].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Total Uncertainty (Normalized)")
+    axes[0].legend(loc="upper left")
+    axes[0].grid(True, alpha=0.3)
+    
+    axes[1].set_ylabel("y")
+    axes[1].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Aleatoric Uncertainty (Normalized)")
+    axes[1].legend(loc="upper left")
+    axes[1].grid(True, alpha=0.3)
+    
+    axes[2].set_ylabel("y")
+    axes[2].set_xlabel("x")
+    axes[2].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Epistemic Uncertainty (Normalized)")
+    axes[2].legend(loc="upper left")
+    axes[2].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot with organized folder structure
+    subfolder = f"uncertainties_undersampling_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_undersampling_normalized/{noise_type}"
+    save_plot(fig, f"{title}_normalized", subfolder=subfolder)
+    
+    # Display plot in notebook
+    if _ipython_available:
+        display(fig)
+    plt.show()
+    plt.close(fig)
+
+
+def plot_uncertainties_entropy_undersampling_normalized(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                                                         region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3):
+    """Plot normalized entropy-based uncertainties with undersampling regions highlighted
+    
+    Args:
+        x_train: Training data x values
+        y_train: Training data y values
+        x_grid: Grid x values for evaluation
+        y_clean: Clean function values at grid points
+        mu_pred: Predictive mean
+        ale_entropy: Aleatoric entropy (nats)
+        epi_entropy: Epistemic entropy (nats)
+        tot_entropy: Total entropy (nats)
+        region_masks: List of boolean masks, one for each region
+        sampling_regions: List of tuples (region_tuple, density_factor)
+        title: Plot title
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        func_type: Function type identifier (e.g., 'linear', 'sin')
+        scale_factor: Scaling factor for normalized bands (default 0.3)
+    """
+    fig, axes = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
+    x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
+    
+    # Ensure arrays are 1D for plotting
+    if mu_pred.ndim > 1:
+        mu_pred = mu_pred.squeeze()
+    if ale_entropy.ndim > 1:
+        ale_entropy = ale_entropy.squeeze()
+    if epi_entropy.ndim > 1:
+        epi_entropy = epi_entropy.squeeze()
+    if tot_entropy.ndim > 1:
+        tot_entropy = tot_entropy.squeeze()
+    
+    # Prepare clean function values
+    y_clean_flat = y_clean[:, 0] if y_clean.ndim > 1 else y_clean
+    
+    # Compute y-axis range
+    y_range = y_clean_flat.max() - y_clean_flat.min()
+    
+    # Normalize ale and epi entropy separately
+    ale_entropy_norm = _normalize_values(ale_entropy)
+    epi_entropy_norm = _normalize_values(epi_entropy)
+    
+    # Total is sum of normalized ale and epi
+    tot_entropy_norm = ale_entropy_norm + epi_entropy_norm
+    
+    # Scale normalized values to y-axis range
+    band_width_tot = tot_entropy_norm * y_range * scale_factor
+    band_width_ale = ale_entropy_norm * y_range * scale_factor
+    band_width_epi = epi_entropy_norm * y_range * scale_factor
+    
+    # Define colors for different regions
+    colors = ['blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive']
+    
+    # Prepare training data
+    x_train_flat = x_train[:, 0] if x_train.ndim > 1 else x_train
+    y_train_flat = y_train[:, 0] if y_train.ndim > 1 else y_train
+    
+    # Plot training data in ALL three graphs
+    for ax in axes:
+        for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+            if region_tuple is not None:
+                region_mask_train = (x_train_flat >= region_tuple[0]) & (x_train_flat <= region_tuple[1])
+            else:
+                region_mask_train = region_masks[idx] if idx < len(region_masks) else np.ones(len(x_train_flat), dtype=bool)
+            color = colors[idx % len(colors)]
+            alpha = 0.3 if density_factor < 0.5 else 0.6
+            label = "Training data" if idx == 0 else None
+            ax.scatter(x_train_flat[region_mask_train], y_train_flat[region_mask_train], 
+                      alpha=alpha, s=10, color=color, label=label, zorder=3)
+    
+    # Add vertical lines for region boundaries
+    for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+        for ax in axes:
+            ax.axvline(x=region_tuple[0], color='gray', linestyle=':', linewidth=1, alpha=0.5)
+            ax.axvline(x=region_tuple[1], color='gray', linestyle=':', linewidth=1, alpha=0.5)
+    
+    # Plot predictive mean and uncertainties for each region
+    pred_mean_plotted = False
+    tot_unc_plotted = False
+    ale_unc_plotted = False
+    epi_unc_plotted = False
+    
+    for idx, (region_tuple, density_factor) in enumerate(sampling_regions):
+        region_mask = region_masks[idx]
+        color = colors[idx % len(colors)]
+        linestyle = '--' if density_factor < 0.5 else '-'
+        linewidth = 1.5 if density_factor < 0.5 else 2
+        
+        # Plot 0: Total entropy (normalized)
+        if not pred_mean_plotted:
+            axes[0].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, label="Predictive mean")
+            pred_mean_plotted = True
+        else:
+            axes[0].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color)
+        
+        if not tot_unc_plotted:
+            axes[0].fill_between(x[region_mask], mu_pred[region_mask] - band_width_tot[region_mask], 
+                                mu_pred[region_mask] + band_width_tot[region_mask], 
+                                alpha=0.3, color=color, label="±norm(entropy, total)")
+            tot_unc_plotted = True
+        else:
+            axes[0].fill_between(x[region_mask], mu_pred[region_mask] - band_width_tot[region_mask], 
+                                mu_pred[region_mask] + band_width_tot[region_mask], 
+                                alpha=0.3, color=color)
+        
+        # Plot 1: Aleatoric entropy (normalized)
+        if idx == 0:
+            axes[1].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, label="Predictive mean")
+        else:
+            axes[1].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color)
+        
+        if not ale_unc_plotted:
+            axes[1].fill_between(x[region_mask], mu_pred[region_mask] - band_width_ale[region_mask], 
+                                mu_pred[region_mask] + band_width_ale[region_mask], 
+                                alpha=0.3, color=color, label="±norm(entropy, aleatoric)")
+            ale_unc_plotted = True
+        else:
+            axes[1].fill_between(x[region_mask], mu_pred[region_mask] - band_width_ale[region_mask], 
+                                mu_pred[region_mask] + band_width_ale[region_mask], 
+                                alpha=0.3, color=color)
+        
+        # Plot 2: Epistemic entropy (normalized)
+        if idx == 0:
+            axes[2].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color, label="Predictive mean")
+        else:
+            axes[2].plot(x[region_mask], mu_pred[region_mask], linestyle=linestyle, 
+                        linewidth=linewidth, color=color)
+        
+        if not epi_unc_plotted:
+            axes[2].fill_between(x[region_mask], mu_pred[region_mask] - band_width_epi[region_mask], 
+                                mu_pred[region_mask] + band_width_epi[region_mask], 
+                                alpha=0.3, color=color, label="±norm(entropy, epistemic)")
+            epi_unc_plotted = True
+        else:
+            axes[2].fill_between(x[region_mask], mu_pred[region_mask] - band_width_epi[region_mask], 
+                                mu_pred[region_mask] + band_width_epi[region_mask], 
+                                alpha=0.3, color=color)
+    
+    # Plot clean function
+    for ax in axes:
+        ax.plot(x, y_clean_flat, 'r-', linewidth=1.5, alpha=0.8, label="Clean function")
+    
+    # Set labels and titles
+    axes[0].set_ylabel("y")
+    axes[0].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Total Entropy (Normalized)")
+    axes[0].legend(loc="upper left")
+    axes[0].grid(True, alpha=0.3)
+    
+    axes[1].set_ylabel("y")
+    axes[1].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Aleatoric Entropy (Normalized)")
+    axes[1].legend(loc="upper left")
+    axes[1].grid(True, alpha=0.3)
+    
+    axes[2].set_ylabel("y")
+    axes[2].set_xlabel("x")
+    axes[2].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Epistemic Entropy (Normalized)")
+    axes[2].legend(loc="upper left")
+    axes[2].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot with organized folder structure
+    subfolder = f"uncertainties_entropy_undersampling_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_undersampling_normalized/{noise_type}"
+    save_plot(fig, f"{title}_entropy_normalized", subfolder=subfolder)
+    
+    # Display plot in notebook
+    if _ipython_available:
+        display(fig)
     plt.show()
     plt.close(fig)

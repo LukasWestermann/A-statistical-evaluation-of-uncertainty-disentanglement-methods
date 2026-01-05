@@ -19,7 +19,10 @@ import multiprocessing
 from datetime import datetime
 
 from utils.results_save import save_summary_statistics_undersampling, save_model_outputs
-from utils.plotting import plot_uncertainties_undersampling
+from utils.plotting import (
+    plot_uncertainties_undersampling,
+    plot_entropy_lines_undersampling
+)
 from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 from utils.device import get_device_for_worker, get_num_gpus
 from utils.metrics import (
@@ -496,8 +499,6 @@ def compute_and_save_statistics_undersampling(
             spearman_aleatoric_list=[spear_ale_val] if spear_ale_val is not None else None,
             spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None
         )
-        plt.show()
-        plt.close(fig)
         
         results[region_name.lower()] = {
             'avg_ale_norm': avg_ale_norm,
@@ -570,8 +571,6 @@ def compute_and_save_statistics_undersampling(
                 func_type=func_type, model_name=model_name, region_name=region_name,
                 date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
             )
-            plt.show()
-            plt.close(fig)
     
     # Compute overall statistics (across all regions combined)
     all_ale_combined = np.concatenate([unc['ale'] for unc in uncertainties_by_region])
@@ -605,8 +604,6 @@ def compute_and_save_statistics_undersampling(
         func_type=func_type, model_name=model_name, region_name='Overall',
         date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
     )
-    plt.show()
-    plt.close(fig)
     
     results['overall'] = {
         'avg_ale_norm': avg_ale_overall,
@@ -731,8 +728,6 @@ def compute_and_save_statistics_entropy_undersampling(
             date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
             density_factor=density_factor
         )
-        plt.show()
-        plt.close(fig)
         
         results[region_name.lower()] = {
             'avg_ale_norm': avg_ale_entropy_norm,
@@ -803,8 +798,6 @@ def compute_and_save_statistics_entropy_undersampling(
                 func_type=func_type, model_name=model_name, region_name=region_name,
                 date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
             )
-            plt.show()
-            plt.close(fig)
     
     # Compute overall statistics (across all regions combined)
     all_ale_combined = np.concatenate([unc['ale'] for unc in uncertainties_entropy_by_region])
@@ -839,8 +832,6 @@ def compute_and_save_statistics_entropy_undersampling(
         func_type=func_type, model_name=model_name, region_name='Overall',
         date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
     )
-    plt.show()
-    plt.close(fig)
     
     results['overall'] = {
         'avg_ale_norm': avg_ale_overall,
@@ -870,12 +861,12 @@ def run_mc_dropout_undersampling_experiment(
     n_train: int = 1000,
     grid_points: int = 1000,
     seed: int = 42,
-    p: float = 0.2,
+    p: float = 0.25,
     beta: float = 0.5,
-    epochs: int = 250,
+    epochs: int = 500,
     lr: float = 1e-3,
     batch_size: int = 32,
-    mc_samples: int = 20,
+    mc_samples: int = 100,
     parallel: bool = True,
     entropy_method: str = 'analytical'
 ):
@@ -1071,6 +1062,15 @@ def run_mc_dropout_undersampling_experiment(
             func_type=func_type
         )
         
+        # Plot entropy lines (in nats)
+        plot_entropy_lines_undersampling(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, region_masks, sampling_regions,
+            title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - Undersampling",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
         # Compute and save variance-based statistics
         compute_and_save_statistics_undersampling(
             uncertainties_by_region, mse_by_region, sampling_regions,
@@ -1100,8 +1100,8 @@ def run_deep_ensemble_undersampling_experiment(
     seed: int = 42,
     beta: float = 0.5,
     batch_size: int = 32,
-    K: int = 5,
-    epochs: int = 250,
+    K: int = 20,
+    epochs: int = 500,
     parallel: bool = True,
     entropy_method: str = 'analytical'
 ):
@@ -1262,6 +1262,15 @@ def run_deep_ensemble_undersampling_experiment(
             x_train, y_train, x_grid, y_grid_clean,
             mu_pred, ale_entropy, epi_entropy, tot_entropy, region_masks, sampling_regions,
             title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - Undersampling - Entropy",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
+        # Plot entropy lines (in nats)
+        plot_entropy_lines_undersampling(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, region_masks, sampling_regions,
+            title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - Undersampling",
             noise_type=noise_type,
             func_type=func_type
         )
@@ -1495,6 +1504,15 @@ def run_bnn_undersampling_experiment(
             func_type=func_type
         )
         
+        # Plot entropy lines (in nats)
+        plot_entropy_lines_undersampling(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, region_masks, sampling_regions,
+            title=f"BNN (Pyro NUTS) - {function_names[func_type]} - Undersampling",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
         # Compute and save variance-based statistics
         compute_and_save_statistics_undersampling(
             uncertainties_by_region, mse_by_region, sampling_regions,
@@ -1702,6 +1720,15 @@ def run_bamlss_undersampling_experiment(
             x_train, y_train, x_grid, y_grid_clean,
             mu_pred, ale_entropy, epi_entropy, tot_entropy, region_masks, sampling_regions,
             title=f"BAMLSS - {function_names[func_type]} - Undersampling - Entropy",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
+        # Plot entropy lines (in nats)
+        plot_entropy_lines_undersampling(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, region_masks, sampling_regions,
+            title=f"BAMLSS - {function_names[func_type]} - Undersampling",
             noise_type=noise_type,
             func_type=func_type
         )

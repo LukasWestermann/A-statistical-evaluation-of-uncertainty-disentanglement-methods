@@ -18,8 +18,15 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
 
-from utils.results_save import save_summary_statistics_noise_level, save_model_outputs
-from utils.plotting import plot_uncertainties_no_ood
+from utils.results_save import save_summary_statistics_noise_level, save_summary_statistics_entropy_noise_level, save_model_outputs
+from utils.plotting import (
+    plot_uncertainties_no_ood,
+    plot_uncertainties_entropy_no_ood,
+    plot_entropy_lines_no_ood,
+    plot_uncertainties_no_ood_normalized,
+    plot_uncertainties_entropy_no_ood_normalized
+)
+from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 from utils.device import get_device_for_worker, get_num_gpus
 from utils.metrics import (
     compute_predictive_aggregation,
@@ -551,13 +558,14 @@ def run_mc_dropout_noise_level_experiment(
     train_range: tuple = (-5, 10),
     grid_points: int = 1000,
     seed: int = 42,
-    p: float = 0.2,
+    p: float = 0.25,
     beta: float = 0.5,
-    epochs: int = 250,
+    epochs: int = 500,
     lr: float = 1e-3,
     batch_size: int = 32,
-    mc_samples: int = 20,
-    parallel: bool = True
+    mc_samples: int = 100,
+    parallel: bool = True,
+    entropy_method: str = 'analytical'
 ):
     """
     Run noise level experiment for MC Dropout model.
@@ -619,6 +627,7 @@ def run_mc_dropout_noise_level_experiment(
             torch.manual_seed(seed)
             
             uncertainties_by_tau = {tau: {'ale': [], 'epi': [], 'tot': []} for tau in tau_values}
+            uncertainties_entropy_by_tau = {tau: {'ale': [], 'epi': [], 'tot': []} for tau in tau_values}
             mse_by_tau = {tau: [] for tau in tau_values}
             nll_by_tau = {tau: [] for tau in tau_values}
             crps_by_tau = {tau: [] for tau in tau_values}
@@ -668,6 +677,21 @@ def run_mc_dropout_noise_level_experiment(
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
                         
+                        # Compute entropy-based uncertainties
+                        if entropy_method == 'analytical':
+                            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                        elif entropy_method == 'numerical':
+                            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(tau * 100))
+                        else:
+                            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                        ale_entropy = entropy_results['aleatoric']
+                        epi_entropy = entropy_results['epistemic']
+                        tot_entropy = entropy_results['total']
+                        
+                        uncertainties_entropy_by_tau[tau]['ale'].append(ale_entropy)
+                        uncertainties_entropy_by_tau[tau]['epi'].append(epi_entropy)
+                        uncertainties_entropy_by_tau[tau]['tot'].append(tot_entropy)
+                        
                         # Compute predictive aggregation (μ*, σ*²)
                         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
                         
@@ -707,10 +731,47 @@ def run_mc_dropout_noise_level_experiment(
                             date=date
                         )
                         
+                        # Plot variance-based uncertainties
                         plot_uncertainties_no_ood(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
+                            title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                            noise_type=noise_type,
+                            func_type=func_type
+                        )
+                        
+                        # Plot entropy-based uncertainties
+                        plot_uncertainties_entropy_no_ood(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                            title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                            noise_type=noise_type,
+                            func_type=func_type
+                        )
+                        
+                        # Plot entropy lines (in nats)
+                        plot_entropy_lines_no_ood(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution})",
+                            noise_type=noise_type,
+                            func_type=func_type
+                        )
+                        
+                        # Plot normalized variance-based uncertainties
+                        plot_uncertainties_no_ood_normalized(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                            noise_type=noise_type,
+                            func_type=func_type
+                        )
+                        
+                        # Plot normalized entropy-based uncertainties
+                        plot_uncertainties_entropy_no_ood_normalized(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                            title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
                             noise_type=noise_type,
                             func_type=func_type
                         )
@@ -761,6 +822,21 @@ def run_mc_dropout_noise_level_experiment(
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
                     
+                    # Compute entropy-based uncertainties
+                    if entropy_method == 'analytical':
+                        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                    elif entropy_method == 'numerical':
+                        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+                    else:
+                        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                    ale_entropy = entropy_results['aleatoric']
+                    epi_entropy = entropy_results['epistemic']
+                    tot_entropy = entropy_results['total']
+                    
+                    uncertainties_entropy_by_tau[tau]['ale'].append(ale_entropy)
+                    uncertainties_entropy_by_tau[tau]['epi'].append(epi_entropy)
+                    uncertainties_entropy_by_tau[tau]['tot'].append(tot_entropy)
+                    
                     # Compute predictive aggregation (μ*, σ*²)
                     mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
                     
@@ -798,15 +874,52 @@ def run_mc_dropout_noise_level_experiment(
                         date=date
                     )
                     
+                    # Plot variance-based uncertainties
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
+                        title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot entropy lines (in nats)
+                    plot_entropy_lines_no_ood(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution})",
                         noise_type=noise_type,
                         func_type=func_type
                     )
+                    
+                    # Plot normalized variance-based uncertainties
+                    plot_uncertainties_no_ood_normalized(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
+                    
+                    # Plot normalized entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood_normalized(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                        noise_type=noise_type,
+                        func_type=func_type
+                    )
             
-            # Compute and save statistics
+            # Compute and save variance-based statistics
             compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
@@ -815,6 +928,14 @@ def run_mc_dropout_noise_level_experiment(
                 nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
                 spearman_epistemic_by_tau=spearman_epistemic_by_tau
+            )
+            
+            # Compute and save entropy-based statistics
+            compute_and_save_statistics_entropy_noise_level(
+                uncertainties_entropy_by_tau, mse_by_tau, tau_values,
+                function_names[func_type], distribution,
+                noise_type, func_type, 'MC_Dropout',
+                date=date, dropout_p=p, mc_samples=mc_samples
             )
 
 
@@ -830,9 +951,10 @@ def run_deep_ensemble_noise_level_experiment(
     seed: int = 42,
     beta: float = 0.5,
     batch_size: int = 32,
-    K: int = 5,
-    epochs: int = 250,
-    parallel: bool = True
+    K: int = 20,
+    epochs: int = 500,
+    parallel: bool = True,
+    entropy_method: str = 'analytical'
 ):
     """
     Run noise level experiment for Deep Ensemble model.
@@ -889,7 +1011,12 @@ def run_deep_ensemble_noise_level_experiment(
             torch.manual_seed(seed)
             
             uncertainties_by_tau = {tau: {'ale': [], 'epi': [], 'tot': []} for tau in tau_values}
+            uncertainties_entropy_by_tau = {tau: {'ale': [], 'epi': [], 'tot': []} for tau in tau_values}
             mse_by_tau = {tau: [] for tau in tau_values}
+            nll_by_tau = {tau: [] for tau in tau_values}
+            crps_by_tau = {tau: [] for tau in tau_values}
+            spearman_aleatoric_by_tau = {tau: [] for tau in tau_values}
+            spearman_epistemic_by_tau = {tau: [] for tau in tau_values}
             
             num_gpus = get_num_gpus()
             use_gpu = num_gpus > 0 and parallel
@@ -925,6 +1052,21 @@ def run_deep_ensemble_noise_level_experiment(
                         uncertainties_by_tau[tau]['epi'].append(epi_var)
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
+                        
+                        # Compute entropy-based uncertainties
+                        if entropy_method == 'analytical':
+                            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                        elif entropy_method == 'numerical':
+                            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(tau * 100))
+                        else:
+                            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                        ale_entropy = entropy_results['aleatoric']
+                        epi_entropy = entropy_results['epistemic']
+                        tot_entropy = entropy_results['total']
+                        
+                        uncertainties_entropy_by_tau[tau]['ale'].append(ale_entropy)
+                        uncertainties_entropy_by_tau[tau]['epi'].append(epi_entropy)
+                        uncertainties_entropy_by_tau[tau]['tot'].append(tot_entropy)
                         
                         # Compute predictive aggregation (μ*, σ*²)
                         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
@@ -964,10 +1106,43 @@ def run_deep_ensemble_noise_level_experiment(
                             date=date
                         )
                         
+                        # Plot variance-based uncertainties
                         plot_uncertainties_no_ood(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
+                            title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot entropy-based uncertainties
+                        plot_uncertainties_entropy_no_ood(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                            title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot entropy lines (in nats)
+                        plot_entropy_lines_no_ood(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution})",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot normalized variance-based uncertainties
+                        plot_uncertainties_no_ood_normalized(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot normalized entropy-based uncertainties
+                        plot_uncertainties_entropy_no_ood_normalized(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                            title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
                             noise_type=noise_type, func_type=func_type
                         )
                 except Exception as e:
@@ -1011,6 +1186,21 @@ def run_deep_ensemble_noise_level_experiment(
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
                     
+                    # Compute entropy-based uncertainties
+                    if entropy_method == 'analytical':
+                        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                    elif entropy_method == 'numerical':
+                        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+                    else:
+                        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                    ale_entropy = entropy_results['aleatoric']
+                    epi_entropy = entropy_results['epistemic']
+                    tot_entropy = entropy_results['total']
+                    
+                    uncertainties_entropy_by_tau[tau]['ale'].append(ale_entropy)
+                    uncertainties_entropy_by_tau[tau]['epi'].append(epi_entropy)
+                    uncertainties_entropy_by_tau[tau]['tot'].append(tot_entropy)
+                    
                     # Compute predictive aggregation (μ*, σ*²)
                     mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
                     
@@ -1047,14 +1237,47 @@ def run_deep_ensemble_noise_level_experiment(
                         date=date
                     )
                     
+                    # Plot variance-based uncertainties
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
+                        title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                        noise_type=noise_type, func_type=func_type
+                    )
+                    
+                    # Plot entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                        noise_type=noise_type, func_type=func_type
+                    )
+                    
+                    # Plot entropy lines (in nats)
+                    plot_entropy_lines_no_ood(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution})",
                         noise_type=noise_type, func_type=func_type
                     )
+                    
+                    # Plot normalized variance-based uncertainties
+                    plot_uncertainties_no_ood_normalized(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                        noise_type=noise_type, func_type=func_type
+                    )
+                    
+                    # Plot normalized entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood_normalized(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                        noise_type=noise_type, func_type=func_type
+                    )
             
-            # Compute and save statistics
+            # Compute and save variance-based statistics
             compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
@@ -1063,6 +1286,14 @@ def run_deep_ensemble_noise_level_experiment(
                 nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
                 spearman_epistemic_by_tau=spearman_epistemic_by_tau
+            )
+            
+            # Compute and save entropy-based statistics
+            compute_and_save_statistics_entropy_noise_level(
+                uncertainties_entropy_by_tau, mse_by_tau, tau_values,
+                function_names[func_type], distribution,
+                noise_type, func_type, 'Deep_Ensemble',
+                date=date, n_nets=K
             )
 
 
@@ -1081,7 +1312,8 @@ def run_bnn_noise_level_experiment(
     warmup: int = 200,
     samples: int = 200,
     chains: int = 1,
-    parallel: bool = True
+    parallel: bool = True,
+    entropy_method: str = 'analytical'
 ):
     """
     Run noise level experiment for BNN (Bayesian Neural Network) model.
@@ -1140,7 +1372,12 @@ def run_bnn_noise_level_experiment(
             torch.manual_seed(seed)
             
             uncertainties_by_tau = {tau: {'ale': [], 'epi': [], 'tot': []} for tau in tau_values}
+            uncertainties_entropy_by_tau = {tau: {'ale': [], 'epi': [], 'tot': []} for tau in tau_values}
             mse_by_tau = {tau: [] for tau in tau_values}
+            nll_by_tau = {tau: [] for tau in tau_values}
+            crps_by_tau = {tau: [] for tau in tau_values}
+            spearman_aleatoric_by_tau = {tau: [] for tau in tau_values}
+            spearman_epistemic_by_tau = {tau: [] for tau in tau_values}
             
             num_gpus = get_num_gpus()
             use_gpu = num_gpus > 0 and parallel
@@ -1176,6 +1413,21 @@ def run_bnn_noise_level_experiment(
                         uncertainties_by_tau[tau]['epi'].append(epi_var)
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
+                        
+                        # Compute entropy-based uncertainties
+                        if entropy_method == 'analytical':
+                            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                        elif entropy_method == 'numerical':
+                            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(tau * 100))
+                        else:
+                            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                        ale_entropy = entropy_results['aleatoric']
+                        epi_entropy = entropy_results['epistemic']
+                        tot_entropy = entropy_results['total']
+                        
+                        uncertainties_entropy_by_tau[tau]['ale'].append(ale_entropy)
+                        uncertainties_entropy_by_tau[tau]['epi'].append(epi_entropy)
+                        uncertainties_entropy_by_tau[tau]['tot'].append(tot_entropy)
                         
                         # Compute predictive aggregation (μ*, σ*²)
                         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
@@ -1214,10 +1466,43 @@ def run_bnn_noise_level_experiment(
                             date=date
                         )
                         
+                        # Plot variance-based uncertainties
                         plot_uncertainties_no_ood(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
+                            title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot entropy-based uncertainties
+                        plot_uncertainties_entropy_no_ood(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                            title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot entropy lines (in nats)
+                        plot_entropy_lines_no_ood(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution})",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot normalized variance-based uncertainties
+                        plot_uncertainties_no_ood_normalized(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot normalized entropy-based uncertainties
+                        plot_uncertainties_entropy_no_ood_normalized(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                            title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
                             noise_type=noise_type, func_type=func_type
                         )
                 except Exception as e:
@@ -1265,6 +1550,39 @@ def run_bnn_noise_level_experiment(
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
                     
+                    # Compute entropy-based uncertainties
+                    if entropy_method == 'analytical':
+                        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                    elif entropy_method == 'numerical':
+                        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+                    else:
+                        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                    ale_entropy = entropy_results['aleatoric']
+                    epi_entropy = entropy_results['epistemic']
+                    tot_entropy = entropy_results['total']
+                    
+                    uncertainties_entropy_by_tau[tau]['ale'].append(ale_entropy)
+                    uncertainties_entropy_by_tau[tau]['epi'].append(epi_entropy)
+                    uncertainties_entropy_by_tau[tau]['tot'].append(tot_entropy)
+                    
+                    # Compute predictive aggregation (μ*, σ*²)
+                    mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                    
+                    # Compute true noise variance for grid points (use tau from current iteration)
+                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
+                    
+                    # Compute NLL, CRPS, and disentanglement metrics
+                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                    disentangle = compute_uncertainty_disentanglement(
+                        y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                    )
+                    
+                    nll_by_tau[tau].append(nll)
+                    crps_by_tau[tau].append(crps)
+                    spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
+                    spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                    
                     # Save raw model outputs
                     save_model_outputs(
                         mu_samples=mu_samples,
@@ -1282,14 +1600,47 @@ def run_bnn_noise_level_experiment(
                         date=date
                     )
                     
+                    # Plot variance-based uncertainties
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
+                        title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                        noise_type=noise_type, func_type=func_type
+                    )
+                    
+                    # Plot entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                        noise_type=noise_type, func_type=func_type
+                    )
+                    
+                    # Plot entropy lines (in nats)
+                    plot_entropy_lines_no_ood(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution})",
                         noise_type=noise_type, func_type=func_type
                     )
+                    
+                    # Plot normalized variance-based uncertainties
+                    plot_uncertainties_no_ood_normalized(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                        noise_type=noise_type, func_type=func_type
+                    )
+                    
+                    # Plot normalized entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood_normalized(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                        noise_type=noise_type, func_type=func_type
+                    )
             
-            # Compute and save statistics
+            # Compute and save variance-based statistics
             compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
@@ -1298,6 +1649,14 @@ def run_bnn_noise_level_experiment(
                 nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
                 spearman_epistemic_by_tau=spearman_epistemic_by_tau
+            )
+            
+            # Compute and save entropy-based statistics
+            compute_and_save_statistics_entropy_noise_level(
+                uncertainties_entropy_by_tau, mse_by_tau, tau_values,
+                function_names[func_type], distribution,
+                noise_type, func_type, 'BNN',
+                date=date
             )
 
 
@@ -1315,7 +1674,8 @@ def run_bamlss_noise_level_experiment(
     burnin: int = 2000,
     thin: int = 10,
     nsamples: int = 1000,
-    parallel: bool = True
+    parallel: bool = True,
+    entropy_method: str = 'analytical'
 ):
     """
     Run noise level experiment for BAMLSS model.
@@ -1367,6 +1727,7 @@ def run_bamlss_noise_level_experiment(
             torch.manual_seed(seed)
             
             uncertainties_by_tau = {tau: {'ale': [], 'epi': [], 'tot': []} for tau in tau_values}
+            uncertainties_entropy_by_tau = {tau: {'ale': [], 'epi': [], 'tot': []} for tau in tau_values}
             mse_by_tau = {tau: [] for tau in tau_values}
             nll_by_tau = {tau: [] for tau in tau_values}
             crps_by_tau = {tau: [] for tau in tau_values}
@@ -1402,6 +1763,21 @@ def run_bamlss_noise_level_experiment(
                         uncertainties_by_tau[tau]['epi'].append(epi_var)
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
+                        
+                        # Compute entropy-based uncertainties
+                        if entropy_method == 'analytical':
+                            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                        elif entropy_method == 'numerical':
+                            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(tau * 100))
+                        else:
+                            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                        ale_entropy = entropy_results['aleatoric']
+                        epi_entropy = entropy_results['epistemic']
+                        tot_entropy = entropy_results['total']
+                        
+                        uncertainties_entropy_by_tau[tau]['ale'].append(ale_entropy)
+                        uncertainties_entropy_by_tau[tau]['epi'].append(epi_entropy)
+                        uncertainties_entropy_by_tau[tau]['tot'].append(tot_entropy)
                         
                         # Compute predictive aggregation (μ*, σ*²)
                         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
@@ -1440,10 +1816,43 @@ def run_bamlss_noise_level_experiment(
                             date=date
                         )
                         
+                        # Plot variance-based uncertainties
                         plot_uncertainties_no_ood(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
+                            title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot entropy-based uncertainties
+                        plot_uncertainties_entropy_no_ood(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                            title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot entropy lines (in nats)
+                        plot_entropy_lines_no_ood(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution})",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot normalized variance-based uncertainties
+                        plot_uncertainties_no_ood_normalized(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                            noise_type=noise_type, func_type=func_type
+                        )
+                        
+                        # Plot normalized entropy-based uncertainties
+                        plot_uncertainties_entropy_no_ood_normalized(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                            title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
                             noise_type=noise_type, func_type=func_type
                         )
                 except Exception as e:
@@ -1481,6 +1890,21 @@ def run_bamlss_noise_level_experiment(
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
                     
+                    # Compute entropy-based uncertainties
+                    if entropy_method == 'analytical':
+                        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
+                    elif entropy_method == 'numerical':
+                        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+                    else:
+                        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                    ale_entropy = entropy_results['aleatoric']
+                    epi_entropy = entropy_results['epistemic']
+                    tot_entropy = entropy_results['total']
+                    
+                    uncertainties_entropy_by_tau[tau]['ale'].append(ale_entropy)
+                    uncertainties_entropy_by_tau[tau]['epi'].append(epi_entropy)
+                    uncertainties_entropy_by_tau[tau]['tot'].append(tot_entropy)
+                    
                     # Compute predictive aggregation (μ*, σ*²)
                     mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
                     
@@ -1516,14 +1940,47 @@ def run_bamlss_noise_level_experiment(
                         date=date
                     )
                     
+                    # Plot variance-based uncertainties
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
+                        title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                        noise_type=noise_type, func_type=func_type
+                    )
+                    
+                    # Plot entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                        noise_type=noise_type, func_type=func_type
+                    )
+                    
+                    # Plot entropy lines (in nats)
+                    plot_entropy_lines_no_ood(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution})",
                         noise_type=noise_type, func_type=func_type
                     )
+                    
+                    # Plot normalized variance-based uncertainties
+                    plot_uncertainties_no_ood_normalized(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
+                        noise_type=noise_type, func_type=func_type
+                    )
+                    
+                    # Plot normalized entropy-based uncertainties
+                    plot_uncertainties_entropy_no_ood_normalized(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_entropy, epi_entropy, tot_entropy,
+                        title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
+                        noise_type=noise_type, func_type=func_type
+                    )
             
-            # Compute and save statistics
+            # Compute and save variance-based statistics
             compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
@@ -1532,5 +1989,13 @@ def run_bamlss_noise_level_experiment(
                 nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
                 spearman_epistemic_by_tau=spearman_epistemic_by_tau
+            )
+            
+            # Compute and save entropy-based statistics
+            compute_and_save_statistics_entropy_noise_level(
+                uncertainties_entropy_by_tau, mse_by_tau, tau_values,
+                function_names[func_type], distribution,
+                noise_type, func_type, 'BAMLSS',
+                date=date
             )
 

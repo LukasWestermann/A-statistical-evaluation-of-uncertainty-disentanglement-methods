@@ -565,59 +565,8 @@ def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list,
     save_statistics(stats_df, filename, 
                     subfolder=f"undersampling/{noise_type}/{func_type}", save_excel=True)
     
-    # Create and save summary plots
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 6))
-    
-    # Add model name and region name to title if provided
-    title_suffix = f" - {model_name} ({region_name})" if model_name else f" ({region_name})"
-    if density_factor is not None:
-        title_suffix += f" [density={density_factor:.2f}]"
-    
-    # Create dummy x-axis (single value since we're comparing regions, not percentages)
-    x_axis = [0]  # Single point for comparison
-    
-    # Plot 1: Normalized Average Uncertainties
-    ax1.bar([0.2, 0.4, 0.6], [avg_ale_norm_list[0], avg_epi_norm_list[0], avg_tot_norm_list[0]], 
-            width=0.15, color=['green', 'orange', 'blue'], 
-            label=['Aleatoric', 'Epistemic', 'Total'])
-    ax1.set_ylabel('Normalized Average Uncertainty', fontsize=12)
-    ax1.set_title(f'Normalized Average Uncertainties\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax1.set_xticks([0.2, 0.4, 0.6])
-    ax1.set_xticklabels(['Aleatoric', 'Epistemic', 'Total'])
-    ax1.legend(fontsize=10, loc='best')
-    ax1.grid(True, alpha=0.3, axis='y')
-    ax1.set_ylim(0, 1.05)
-    
-    # Plot 2: Correlation between Epistemic and Aleatoric Uncertainties
-    ax2.bar([0.5], [correlation_list[0]], width=0.3, color='purple', label='Correlation (Epi-Ale)')
-    ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-    ax2.set_ylabel('Correlation Coefficient', fontsize=12)
-    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax2.set_xticks([0.5])
-    ax2.set_xticklabels(['Correlation'])
-    ax2.legend(fontsize=10, loc='best')
-    ax2.grid(True, alpha=0.3, axis='y')
-    ax2.set_ylim(-1.05, 1.05)
-    
-    # Plot 3: MSE
-    ax3.bar([0.5], [mse_list[0]], width=0.3, color='red', label='MSE')
-    ax3.set_ylabel('Mean Squared Error', fontsize=12)
-    ax3.set_title(f'MSE\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax3.set_xticks([0.5])
-    ax3.set_xticklabels(['MSE'])
-    ax3.legend(fontsize=10, loc='best')
-    ax3.grid(True, alpha=0.3, axis='y')
-    ax3.set_yscale('log')  # Use log scale for MSE as it can vary widely
-    
-    plt.tight_layout()
-    
-    save_plot(fig, filename, 
-              subfolder=f"undersampling/{noise_type}/{func_type}")
-    
-    return stats_df, fig
+    # Skip plot creation - only return statistics DataFrame
+    return stats_df, None
 
 
 # ========== Entropy-Based Saving Functions ==========
@@ -1018,50 +967,8 @@ def save_summary_statistics_entropy_undersampling(avg_ale_entropy_list, avg_epi_
     save_statistics(stats_df, filename, 
                     subfolder=f"undersampling/{noise_type}/{func_type}", save_excel=True)
     
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 6))
-    title_suffix = f" - {model_name}" if model_name else ""
-    
-    # Plot 1: Average Entropies (bar chart for single value)
-    ax1.bar([0.3, 0.5, 0.7], [avg_ale_entropy_list[0], avg_epi_entropy_list[0], avg_tot_entropy_list[0]], 
-            width=0.15, color=['green', 'orange', 'blue'], 
-            label=['Aleatoric', 'Epistemic', 'Total'])
-    ax1.set_ylabel('Normalized Average Entropy', fontsize=12)
-    ax1.set_title(f'Normalized Average Entropies ({region_name})\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax1.set_xticks([0.3, 0.5, 0.7])
-    ax1.set_xticklabels(['Aleatoric', 'Epistemic', 'Total'])
-    ax1.legend(fontsize=10, loc='best')
-    ax1.grid(True, alpha=0.3, axis='y')
-    
-    # Plot 2: Correlation
-    ax2.bar([0.5], [correlation_list[0]], width=0.3, color='purple', label='Correlation (Epi-Ale)')
-    ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-    ax2.set_ylabel('Correlation Coefficient', fontsize=12)
-    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax2.set_xticks([0.5])
-    ax2.set_xticklabels(['Correlation'])
-    ax2.legend(fontsize=10, loc='best')
-    ax2.grid(True, alpha=0.3, axis='y')
-    ax2.set_ylim(-1.05, 1.05)
-    
-    # Plot 3: MSE
-    ax3.bar([0.5], [mse_list[0]], width=0.3, color='red', label='MSE')
-    ax3.set_ylabel('Mean Squared Error', fontsize=12)
-    ax3.set_title(f'MSE ({region_name})\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax3.set_xticks([0.5])
-    ax3.set_xticklabels(['MSE'])
-    ax3.legend(fontsize=10, loc='best')
-    ax3.grid(True, alpha=0.3, axis='y')
-    ax3.set_yscale('log')
-    
-    plt.tight_layout()
-    
-    save_plot(fig, filename, 
-              subfolder=f"undersampling/{noise_type}/{func_type}")
-    
-    return stats_df, fig
+    # Skip plot creation - only return statistics DataFrame
+    return stats_df, None
 
 
 # ========== Model Outputs Saving Function ==========

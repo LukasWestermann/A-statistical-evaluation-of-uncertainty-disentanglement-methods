@@ -55,7 +55,7 @@ def beta_nll(y, mu, var, beta=0.5):
     return weight * gaussian_nll(y, mu, var)
 
 # ----- Training loop -----
-def train_model(model, loader, epochs=250, lr=1e-3, loss_type='nll', beta=0.5, device=None):
+def train_model(model, loader, epochs=500, lr=1e-3, loss_type='nll', beta=0.5, device=None):
     if device is None:
         device = get_device()
     model.to(device)
@@ -118,7 +118,7 @@ def normalize_x_data(x, x_mean, x_std):
         return (x - x_mean) / x_std
 
 # ----- MC-Dropout sampling and uncertainty decomposition -----
-def mc_dropout_predict(model, x, M=20, device=None, return_raw_arrays=False):
+def mc_dropout_predict(model, x, M=100, device=None, return_raw_arrays=False):
     # Keep dropout active at inference by using train() but without gradients
     if device is None:
         device = get_device()
