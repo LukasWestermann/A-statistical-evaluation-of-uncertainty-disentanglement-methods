@@ -98,8 +98,7 @@ def main():
         "Undersampling.ipynb",
         "Noise_Level.ipynb",
         "OOD.ipynb",
-        "OOD_Parameter_Comparison.ipynb",
-        "Measurment Error.ipynb",  # Note: typo in filename preserved
+        "OOD_Parameter_Comparison.ipynb",  # Note: typo in filename preserved
     ]
     
     print("\n" + "="*70)
