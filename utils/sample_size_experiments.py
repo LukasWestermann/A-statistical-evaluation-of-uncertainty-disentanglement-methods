@@ -22,6 +22,13 @@ from utils.results_save import save_summary_statistics, save_summary_statistics_
 from utils.plotting import plot_uncertainties_no_ood, plot_uncertainties_entropy_no_ood
 from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 from utils.device import get_device_for_worker, get_num_gpus
+from utils.metrics import (
+    compute_predictive_aggregation,
+    compute_gaussian_nll,
+    compute_crps_gaussian,
+    compute_true_noise_variance,
+    compute_uncertainty_disentanglement
+)
 
 # Set multiprocessing start method for CUDA support (Linux: can use 'fork' or 'spawn')
 # Using 'spawn' for better CUDA compatibility
@@ -95,7 +102,7 @@ def _train_single_percentage_mc_dropout(args):
 def _train_single_percentage_deep_ensemble(args):
     """Wrapper function for training Deep Ensemble at a single percentage (for parallel execution)."""
     (worker_id, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-     seed, beta, batch_size, K, func_type, noise_type, entropy_method) = args
+     seed, beta, batch_size, K, epochs, func_type, noise_type, entropy_method) = args
     
     # Set device for this worker
     device = get_device_for_worker(worker_id)
@@ -130,7 +137,7 @@ def _train_single_percentage_deep_ensemble(args):
     ensemble = train_ensemble_deep(
         x_train_subset_norm, y_train_subset,
         batch_size=batch_size, K=K,
-        loss_type='beta_nll', beta=beta, parallel=True
+        loss_type='beta_nll', beta=beta, parallel=True, epochs=epochs
     )
     
     # Make predictions with raw arrays for entropy computation
@@ -275,7 +282,11 @@ def compute_and_save_statistics(
     date: str = None,
     dropout_p: float = None,
     mc_samples: int = None,
-    n_nets: int = None
+    n_nets: int = None,
+    nll_by_pct: dict = None,
+    crps_by_pct: dict = None,
+    spearman_aleatoric_by_pct: dict = None,
+    spearman_epistemic_by_pct: dict = None
 ):
     """
     Shared function to compute normalized statistics and save results.
@@ -341,11 +352,11 @@ def compute_and_save_statistics(
     print(f"Normalized Average Uncertainties by Percentage - {function_name} Function - {model_name}")
     print(f"{'='*60}")
     if mse_by_pct is not None:
-        print(f"\n{'Percentage':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15}")
-        print("-" * 140)
+        print(f"\n{'Percentage':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15} {'NLL':<15} {'CRPS':<15} {'Spear_Ale':<15} {'Spear_Epi':<15}")
+        print("-" * 200)
     else:
-        print(f"\n{'Percentage':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25}")
-        print("-" * 120)
+        print(f"\n{'Percentage':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25} {'NLL':<15} {'CRPS':<15} {'Spear_Ale':<15} {'Spear_Epi':<15}")
+        print("-" * 180)
     
     for pct in percentages:
         ale_vals = np.concatenate(uncertainties_by_pct[pct]['ale'])
@@ -370,17 +381,67 @@ def compute_and_save_statistics(
         correlation_list.append(correlation)
         
         # Compute average MSE if provided
+        avg_mse = None
         if mse_by_pct is not None and pct in mse_by_pct:
             avg_mse = np.mean(mse_by_pct[pct])
             mse_list.append(avg_mse)
-            print(f"{pct:>3}%        {avg_ale_norm:>24.6f}  {avg_epi_norm:>24.6f}  {avg_tot_norm:>24.6f}  {correlation:>24.6f}  {avg_mse:>15.6f}")
+        
+        # Get metrics for this percentage
+        avg_nll = np.mean(nll_by_pct[pct]) if nll_by_pct is not None and pct in nll_by_pct else None
+        avg_crps = np.mean(crps_by_pct[pct]) if crps_by_pct is not None and pct in crps_by_pct else None
+        avg_spear_ale = np.mean(spearman_aleatoric_by_pct[pct]) if spearman_aleatoric_by_pct is not None and pct in spearman_aleatoric_by_pct else None
+        avg_spear_epi = np.mean(spearman_epistemic_by_pct[pct]) if spearman_epistemic_by_pct is not None and pct in spearman_epistemic_by_pct else None
+        
+        # Print statistics
+        mse_str = f"{avg_mse:>15.6f}" if avg_mse is not None else f"{'N/A':>15}"
+        nll_str = f"{avg_nll:>15.6f}" if avg_nll is not None else f"{'N/A':>15}"
+        crps_str = f"{avg_crps:>15.6f}" if avg_crps is not None else f"{'N/A':>15}"
+        spear_ale_str = f"{avg_spear_ale:>15.6f}" if avg_spear_ale is not None else f"{'N/A':>15}"
+        spear_epi_str = f"{avg_spear_epi:>15.6f}" if avg_spear_epi is not None else f"{'N/A':>15}"
+        if mse_by_pct is not None:
+            print_line = f"{pct:>3}%        {avg_ale_norm:>24.6f}  {avg_epi_norm:>24.6f}  {avg_tot_norm:>24.6f}  {correlation:>24.6f} {mse_str} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
         else:
-            print(f"{pct:>3}%        {avg_ale_norm:>24.6f}  {avg_epi_norm:>24.6f}  {avg_tot_norm:>24.6f}  {correlation:>24.6f}")
+            print_line = f"{pct:>3}%        {avg_ale_norm:>24.6f}  {avg_epi_norm:>24.6f}  {avg_tot_norm:>24.6f}  {correlation:>24.6f} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
+        print(print_line)
     
     print(f"\n{'='*60}")
     print("Note: Average values are normalized to [0, 1] range across all percentages")
     print("      Correlation is computed on original (non-normalized) uncertainty values")
     print(f"{'='*60}")
+    
+    # Prepare metrics lists
+    nll_list = []
+    crps_list = []
+    spearman_aleatoric_list = []
+    spearman_epistemic_list = []
+    
+    if nll_by_pct is not None:
+        for pct in percentages:
+            if pct in nll_by_pct:
+                nll_list.append(np.mean(nll_by_pct[pct]))
+            else:
+                nll_list.append(None)
+    
+    if crps_by_pct is not None:
+        for pct in percentages:
+            if pct in crps_by_pct:
+                crps_list.append(np.mean(crps_by_pct[pct]))
+            else:
+                crps_list.append(None)
+    
+    if spearman_aleatoric_by_pct is not None:
+        for pct in percentages:
+            if pct in spearman_aleatoric_by_pct:
+                spearman_aleatoric_list.append(np.mean(spearman_aleatoric_by_pct[pct]))
+            else:
+                spearman_aleatoric_list.append(None)
+    
+    if spearman_epistemic_by_pct is not None:
+        for pct in percentages:
+            if pct in spearman_epistemic_by_pct:
+                spearman_epistemic_list.append(np.mean(spearman_epistemic_by_pct[pct]))
+            else:
+                spearman_epistemic_list.append(None)
     
     # Save summary statistics
     stats_df, fig = save_summary_statistics(
@@ -389,7 +450,11 @@ def compute_and_save_statistics(
         function_name, noise_type=noise_type,
         func_type=func_type, model_name=model_name,
         mse_list=mse_list if mse_list else None,
-        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
+        nll_list=nll_list if nll_list else None,
+        crps_list=crps_list if crps_list else None,
+        spearman_aleatoric_list=spearman_aleatoric_list if spearman_aleatoric_list else None,
+        spearman_epistemic_list=spearman_epistemic_list if spearman_epistemic_list else None
     )
     plt.show()
     plt.close(fig)
@@ -423,9 +488,9 @@ def compute_and_save_statistics_entropy(
     n_nets: int = None
 ):
     """
-    Shared function to compute entropy-based statistics and save results.
+    Shared function to compute normalized entropy-based statistics and save results.
     
-    This function computes averages and correlations for entropy-based uncertainties,
+    This function normalizes entropy values, computes averages and correlations,
     prints formatted statistics, and saves results.
     
     Parameters:
@@ -457,6 +522,25 @@ def compute_and_save_statistics_entropy(
     --------
     dict : Statistics dictionary with percentages, averages, correlations, MSE, and stats_df
     """
+    def normalize(values, vmin, vmax):
+        """Normalize values to [0, 1] range"""
+        if vmax - vmin == 0:
+            return np.zeros_like(values)
+        return (values - vmin) / (vmax - vmin)
+    
+    # Collect all values for normalization
+    all_ale = np.concatenate([np.concatenate(uncertainties_by_pct[pct]['ale']) 
+                              for pct in percentages])
+    all_epi = np.concatenate([np.concatenate(uncertainties_by_pct[pct]['epi']) 
+                              for pct in percentages])
+    all_tot = np.concatenate([np.concatenate(uncertainties_by_pct[pct]['tot']) 
+                              for pct in percentages])
+    
+    # Compute min/max for normalization
+    ale_min, ale_max = all_ale.min(), all_ale.max()
+    epi_min, epi_max = all_epi.min(), all_epi.max()
+    tot_min, tot_max = all_tot.min(), all_tot.max()
+    
     # Compute statistics for each percentage
     avg_ale_entropy_list = []
     avg_epi_entropy_list = []
@@ -465,13 +549,13 @@ def compute_and_save_statistics_entropy(
     mse_list = []
     
     print(f"\n{'='*60}")
-    print(f"Average Entropies by Percentage - {function_name} Function - {model_name}")
+    print(f"Normalized Average Entropies by Percentage - {function_name} Function - {model_name}")
     print(f"{'='*60}")
     if mse_by_pct is not None:
-        print(f"\n{'Percentage':<12} {'Avg Aleatoric (nats)':<25} {'Avg Epistemic (nats)':<25} {'Avg Total (nats)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15}")
+        print(f"\n{'Percentage':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15}")
         print("-" * 140)
     else:
-        print(f"\n{'Percentage':<12} {'Avg Aleatoric (nats)':<25} {'Avg Epistemic (nats)':<25} {'Avg Total (nats)':<25} {'Correlation (Epi-Ale)':<25}")
+        print(f"\n{'Percentage':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25}")
         print("-" * 120)
     
     for pct in percentages:
@@ -479,10 +563,18 @@ def compute_and_save_statistics_entropy(
         epi_vals = np.concatenate(uncertainties_by_pct[pct]['epi'])
         tot_vals = np.concatenate(uncertainties_by_pct[pct]['tot'])
         
-        avg_ale_entropy = np.mean(ale_vals)
-        avg_epi_entropy = np.mean(epi_vals)
-        avg_tot_entropy = np.mean(tot_vals)
+        # Normalize entropy values (ale and epi separately)
+        ale_norm = normalize(ale_vals, ale_min, ale_max)
+        epi_norm = normalize(epi_vals, epi_min, epi_max)
+        # Total is sum of normalized ale and epi (not normalized separately)
+        tot_norm = ale_norm + epi_norm
         
+        # Compute normalized averages
+        avg_ale_entropy = np.mean(ale_norm)
+        avg_epi_entropy = np.mean(epi_norm)
+        avg_tot_entropy = np.mean(tot_norm)
+        
+        # Correlation computed on original (non-normalized) values
         correlation = np.corrcoef(epi_vals, ale_vals)[0, 1]
         if np.isnan(correlation):
             correlation = 0.0
@@ -500,8 +592,8 @@ def compute_and_save_statistics_entropy(
             print(f"{pct:<12} {avg_ale_entropy:>24.6f}  {avg_epi_entropy:>24.6f}  {avg_tot_entropy:>24.6f}  {correlation:>24.6f}")
     
     print(f"\n{'='*60}")
-    print("Note: Entropy values are in nats (natural logarithm base)")
-    print("      Correlation is computed on entropy values")
+    print("Note: Average entropy values are normalized to [0, 1] range across all percentages")
+    print("      Correlation is computed on original (non-normalized) entropy values")
     print(f"{'='*60}")
     
     # Save summary statistics
@@ -542,7 +634,7 @@ def run_mc_dropout_sample_size_experiment(
     seed: int = 42,
     p: float = 0.1,
     beta: float = 0.5,
-    epochs: int = 700,
+    epochs: int = 250,
     lr: float = 1e-3,
     batch_size: int = 32,
     mc_samples: int = 20,
@@ -615,6 +707,10 @@ def run_mc_dropout_sample_size_experiment(
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         uncertainties_entropy_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
+        nll_by_pct = {pct: [] for pct in percentages}
+        crps_by_pct = {pct: [] for pct in percentages}
+        spearman_aleatoric_by_pct = {pct: [] for pct in percentages}
+        spearman_epistemic_by_pct = {pct: [] for pct in percentages}
         
         # Prepare arguments for parallel execution
         num_gpus = get_num_gpus()
@@ -750,6 +846,24 @@ def run_mc_dropout_sample_size_experiment(
                 uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                 mse_by_pct[pct].append(mse)
                 
+                # Compute predictive aggregation (μ*, σ*²)
+                mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                
+                # Compute true noise variance for grid points
+                true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+                
+                # Compute NLL, CRPS, and disentanglement metrics
+                nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                disentangle = compute_uncertainty_disentanglement(
+                    y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                )
+                
+                nll_by_pct[pct].append(nll)
+                crps_by_pct[pct].append(crps)
+                spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
+                spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
+                
                 # Save raw model outputs
                 save_model_outputs(
                     mu_samples=mu_samples,
@@ -791,7 +905,10 @@ def run_mc_dropout_sample_size_experiment(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
             mse_by_pct=mse_by_pct,
-            date=date, dropout_p=p, mc_samples=mc_samples
+            date=date, dropout_p=p, mc_samples=mc_samples,
+            nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
+            spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
+            spearman_epistemic_by_pct=spearman_epistemic_by_pct
         )
         
         # Compute and save entropy-based statistics
@@ -815,6 +932,7 @@ def run_deep_ensemble_sample_size_experiment(
     beta: float = 0.5,
     batch_size: int = 32,
     K: int = 5,
+    epochs: int = 250,
     parallel: bool = True,
     entropy_method: str = 'analytical'
 ):
@@ -881,6 +999,10 @@ def run_deep_ensemble_sample_size_experiment(
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         uncertainties_entropy_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
+        nll_by_pct = {pct: [] for pct in percentages}
+        crps_by_pct = {pct: [] for pct in percentages}
+        spearman_aleatoric_by_pct = {pct: [] for pct in percentages}
+        spearman_epistemic_by_pct = {pct: [] for pct in percentages}
         
         # Prepare arguments for parallel execution
         num_gpus = get_num_gpus()
@@ -891,7 +1013,7 @@ def run_deep_ensemble_sample_size_experiment(
             print(f"Using {'GPU' if use_gpu else 'CPU'} parallelization with {max_workers} workers")
             
             args_list = [(idx, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-                         seed, beta, batch_size, K, func_type, noise_type, entropy_method)
+                         seed, beta, batch_size, K, epochs, func_type, noise_type, entropy_method)
                         for idx, pct in enumerate(percentages)]
             
             try:
@@ -911,6 +1033,26 @@ def run_deep_ensemble_sample_size_experiment(
                     uncertainties_entropy_by_pct[pct]['epi'].append(epi_entropy)
                     uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                     mse_by_pct[pct].append(mse)
+                    
+                    # Compute predictive aggregation (μ*, σ*²)
+                    mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                    
+                    # Compute true noise variance for grid points
+                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+                    
+                    # Compute NLL, CRPS, and disentanglement metrics
+                    mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
+                    y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
+                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                    disentangle = compute_uncertainty_disentanglement(
+                        y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                    )
+                    
+                    nll_by_pct[pct].append(nll)
+                    crps_by_pct[pct].append(crps)
+                    spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
+                    spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
                     
                     # Save raw model outputs
                     save_model_outputs(
@@ -972,7 +1114,7 @@ def run_deep_ensemble_sample_size_experiment(
                 ensemble = train_ensemble_deep(
                     x_train_subset_norm, y_train_subset,
                     batch_size=batch_size, K=K,
-                    loss_type='beta_nll', beta=beta, parallel=True
+                    loss_type='beta_nll', beta=beta, parallel=True, epochs=epochs
                 )
                 
                 # Make predictions with raw arrays
@@ -1001,6 +1143,24 @@ def run_deep_ensemble_sample_size_experiment(
                 uncertainties_entropy_by_pct[pct]['epi'].append(epi_entropy)
                 uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                 mse_by_pct[pct].append(mse)
+                
+                # Compute predictive aggregation (μ*, σ*²)
+                mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                
+                # Compute true noise variance for grid points
+                true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+                
+                # Compute NLL, CRPS, and disentanglement metrics
+                nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                disentangle = compute_uncertainty_disentanglement(
+                    y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                )
+                
+                nll_by_pct[pct].append(nll)
+                crps_by_pct[pct].append(crps)
+                spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
+                spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
                 
                 # Save raw model outputs
                 save_model_outputs(
@@ -1041,7 +1201,10 @@ def run_deep_ensemble_sample_size_experiment(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
             mse_by_pct=mse_by_pct,
-            date=date, n_nets=K
+            date=date, n_nets=K,
+            nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
+            spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
+            spearman_epistemic_by_pct=spearman_epistemic_by_pct
         )
 
 
@@ -1153,6 +1316,26 @@ def run_bnn_sample_size_experiment(
                     uncertainties_by_pct[pct]['tot'].append(tot_var)
                     mse_by_pct[pct].append(mse)
                     
+                    # Compute predictive aggregation (μ*, σ*²)
+                    mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                    
+                    # Compute true noise variance for grid points
+                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+                    
+                    # Compute NLL, CRPS, and disentanglement metrics
+                    mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
+                    y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
+                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                    disentangle = compute_uncertainty_disentanglement(
+                        y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                    )
+                    
+                    nll_by_pct[pct].append(nll)
+                    crps_by_pct[pct].append(crps)
+                    spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
+                    spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
+                    
                     # Save raw model outputs
                     save_model_outputs(
                         mu_samples=mu_samples,
@@ -1250,7 +1433,10 @@ def run_bnn_sample_size_experiment(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'BNN',
             mse_by_pct=mse_by_pct,
-            date=date
+            date=date,
+            nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
+            spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
+            spearman_epistemic_by_pct=spearman_epistemic_by_pct
         )
 
 
@@ -1327,6 +1513,10 @@ def run_bamlss_sample_size_experiment(
         n_train_full_actual = len(x_train_full)
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
+        nll_by_pct = {pct: [] for pct in percentages}
+        crps_by_pct = {pct: [] for pct in percentages}
+        spearman_aleatoric_by_pct = {pct: [] for pct in percentages}
+        spearman_epistemic_by_pct = {pct: [] for pct in percentages}
         
         # BAMLSS uses R, so CPU-only parallelization
         if parallel and len(percentages) > 1:
@@ -1347,6 +1537,26 @@ def run_bamlss_sample_size_experiment(
                     uncertainties_by_pct[pct]['epi'].append(epi_var)
                     uncertainties_by_pct[pct]['tot'].append(tot_var)
                     mse_by_pct[pct].append(mse)
+                    
+                    # Compute predictive aggregation (μ*, σ*²)
+                    mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                    
+                    # Compute true noise variance for grid points
+                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+                    
+                    # Compute NLL, CRPS, and disentanglement metrics
+                    mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
+                    y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
+                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                    disentangle = compute_uncertainty_disentanglement(
+                        y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                    )
+                    
+                    nll_by_pct[pct].append(nll)
+                    crps_by_pct[pct].append(crps)
+                    spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
+                    spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
                     
                     # Save raw model outputs
                     save_model_outputs(
@@ -1406,6 +1616,24 @@ def run_bamlss_sample_size_experiment(
                 uncertainties_by_pct[pct]['tot'].append(tot_var)
                 mse_by_pct[pct].append(mse)
                 
+                # Compute predictive aggregation (μ*, σ*²)
+                mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                
+                # Compute true noise variance for grid points
+                true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+                
+                # Compute NLL, CRPS, and disentanglement metrics
+                nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                disentangle = compute_uncertainty_disentanglement(
+                    y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                )
+                
+                nll_by_pct[pct].append(nll)
+                crps_by_pct[pct].append(crps)
+                spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
+                spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
+                
                 # Save raw model outputs
                 save_model_outputs(
                     mu_samples=mu_samples,
@@ -1435,6 +1663,9 @@ def run_bamlss_sample_size_experiment(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
             mse_by_pct=mse_by_pct,
-            date=date
+            date=date,
+            nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
+            spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
+            spearman_epistemic_by_pct=spearman_epistemic_by_pct
         )
 

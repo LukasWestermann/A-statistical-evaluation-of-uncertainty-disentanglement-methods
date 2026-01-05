@@ -55,7 +55,7 @@ def beta_nll(y, mu, var, beta=0.5):
     return weight * gaussian_nll(y, mu, var)
 
 # ----- Training loop -----
-def train_model(model, loader, epochs=700, lr=1e-3, loss_type='nll', beta=0.5, device=None):
+def train_model(model, loader, epochs=250, lr=1e-3, loss_type='nll', beta=0.5, device=None):
     if device is None:
         device = get_device()
     model.to(device)

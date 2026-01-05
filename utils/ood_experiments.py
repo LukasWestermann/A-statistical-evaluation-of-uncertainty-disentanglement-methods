@@ -19,9 +19,16 @@ import multiprocessing
 from datetime import datetime
 
 from utils.results_save import save_summary_statistics_ood, save_summary_statistics_entropy_ood, save_model_outputs
-from utils.plotting import plot_uncertainties_ood, plot_uncertainties_entropy_ood
+from utils.plotting import plot_uncertainties_ood, plot_uncertainties_entropy_ood, plot_uncertainties_ood_normalized, plot_uncertainties_entropy_ood_normalized
 from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 from utils.device import get_device_for_worker, get_num_gpus
+from utils.metrics import (
+    compute_predictive_aggregation,
+    compute_gaussian_nll,
+    compute_crps_gaussian,
+    compute_true_noise_variance,
+    compute_uncertainty_disentanglement
+)
 
 # Set multiprocessing start method for CUDA support (Linux: can use 'fork' or 'spawn')
 # Using 'spawn' for better CUDA compatibility
@@ -213,7 +220,7 @@ def _train_single_ood_mc_dropout(args):
 def _train_single_ood_deep_ensemble(args):
     """Wrapper function for training Deep Ensemble for OOD experiment (for parallel execution)."""
     (worker_id, x_train, y_train, x_grid, y_grid_clean, ood_mask,
-     seed, beta, batch_size, K, func_type, noise_type) = args
+     seed, beta, batch_size, K, epochs, func_type, noise_type) = args
     
     # Set device for this worker
     device = get_device_for_worker(worker_id)
@@ -241,7 +248,7 @@ def _train_single_ood_deep_ensemble(args):
     ensemble = train_ensemble_deep(
         x_train_norm, y_train,
         batch_size=batch_size, K=K,
-        loss_type='beta_nll', beta=beta, parallel=True
+        loss_type='beta_nll', beta=beta, parallel=True, epochs=epochs
     )
     
     # Make predictions
@@ -347,7 +354,19 @@ def compute_and_save_statistics_ood(
     date: str = None,
     dropout_p: float = None,
     mc_samples: int = None,
-    n_nets: int = None
+    n_nets: int = None,
+    nll_id: float = None,
+    nll_ood: float = None,
+    nll_combined: float = None,
+    crps_id: float = None,
+    crps_ood: float = None,
+    crps_combined: float = None,
+    spearman_aleatoric_id: float = None,
+    spearman_aleatoric_ood: float = None,
+    spearman_aleatoric_combined: float = None,
+    spearman_epistemic_id: float = None,
+    spearman_epistemic_ood: float = None,
+    spearman_epistemic_combined: float = None
 ):
     """
     Shared function to compute normalized statistics and save results for OOD experiments.
@@ -417,8 +436,15 @@ def compute_and_save_statistics_ood(
     print(f"\n{'='*60}")
     print(f"OOD Experiment Statistics - {function_name} Function - {model_name}")
     print(f"{'='*60}")
-    print(f"\n{'Region':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15}")
-    print("-" * 140)
+    header = f"\n{'Region':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15} {'NLL':<15} {'CRPS':<15} {'Spear_Ale':<15} {'Spear_Epi':<15}"
+    print(header)
+    print("-" * len(header))
+    
+    metrics_dict = {
+        'ID': {'nll': nll_id, 'crps': crps_id, 'spear_ale': spearman_aleatoric_id, 'spear_epi': spearman_epistemic_id},
+        'OOD': {'nll': nll_ood, 'crps': crps_ood, 'spear_ale': spearman_aleatoric_ood, 'spear_epi': spearman_epistemic_ood},
+        'Combined': {'nll': nll_combined, 'crps': crps_combined, 'spear_ale': spearman_aleatoric_combined, 'spear_epi': spearman_epistemic_combined}
+    }
     
     for region_name, uncertainties, mse in regions:
         ale_vals = uncertainties['ale']
@@ -437,17 +463,36 @@ def compute_and_save_statistics_ood(
         if np.isnan(correlation):
             correlation = 0.0
         
-        print(f"{region_name:<12} {avg_ale_norm:>24.6f}  {avg_epi_norm:>24.6f}  {avg_tot_norm:>24.6f}  {correlation:>24.6f}  {mse:>15.6f}")
+        # Get metrics for this region
+        metrics = metrics_dict[region_name]
+        nll_val = metrics['nll']
+        crps_val = metrics['crps']
+        spear_ale_val = metrics['spear_ale']
+        spear_epi_val = metrics['spear_epi']
+        
+        # Print statistics
+        nll_str = f"{nll_val:>15.6f}" if nll_val is not None else f"{'N/A':>15}"
+        crps_str = f"{crps_val:>15.6f}" if crps_val is not None else f"{'N/A':>15}"
+        spear_ale_str = f"{spear_ale_val:>15.6f}" if spear_ale_val is not None else f"{'N/A':>15}"
+        spear_epi_str = f"{spear_epi_val:>15.6f}" if spear_epi_val is not None else f"{'N/A':>15}"
+        print_line = f"{region_name:<12} {avg_ale_norm:>24.6f}  {avg_epi_norm:>24.6f}  {avg_tot_norm:>24.6f}  {correlation:>24.6f}  {mse:>15.6f} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
+        print(print_line)
         
         # Save statistics for this region
         stats_df, fig = save_summary_statistics_ood(
             [avg_ale_norm], [avg_epi_norm], [avg_tot_norm], [correlation], [mse],
             function_name, noise_type=noise_type,
             func_type=func_type, model_name=model_name, region_type=region_name,
-            date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+            date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
+            nll_list=[nll_val] if nll_val is not None else None,
+            crps_list=[crps_val] if crps_val is not None else None,
+            spearman_aleatoric_list=[spear_ale_val] if spear_ale_val is not None else None,
+            spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None
         )
-        plt.show()
-        plt.close(fig)
+        # Summary plots removed - only uncertainty plots with data points are displayed
+        if fig is not None:
+            plt.show()
+            plt.close(fig)
         
         results[region_name.lower()] = {
             'avg_ale_norm': avg_ale_norm,
@@ -455,6 +500,10 @@ def compute_and_save_statistics_ood(
             'avg_tot_norm': avg_tot_norm,
             'correlation': correlation,
             'mse': mse,
+            'nll': nll_val,
+            'crps': crps_val,
+            'spearman_aleatoric': spear_ale_val,
+            'spearman_epistemic': spear_epi_val,
             'stats_df': stats_df
         }
     
@@ -480,12 +529,24 @@ def compute_and_save_statistics_entropy_ood(
     date: str = None,
     dropout_p: float = None,
     mc_samples: int = None,
-    n_nets: int = None
+    n_nets: int = None,
+    nll_id: float = None,
+    nll_ood: float = None,
+    nll_combined: float = None,
+    crps_id: float = None,
+    crps_ood: float = None,
+    crps_combined: float = None,
+    spearman_aleatoric_id: float = None,
+    spearman_aleatoric_ood: float = None,
+    spearman_aleatoric_combined: float = None,
+    spearman_epistemic_id: float = None,
+    spearman_epistemic_ood: float = None,
+    spearman_epistemic_combined: float = None
 ):
     """
-    Shared function to compute entropy-based statistics and save results for OOD experiments.
+    Shared function to compute normalized entropy-based statistics and save results for OOD experiments.
     
-    This function computes averages and correlations for entropy-based uncertainties,
+    This function normalizes entropy values, computes averages and correlations,
     prints formatted statistics, and saves results separately for ID, OOD, and combined regions.
     
     Parameters:
@@ -523,6 +584,22 @@ def compute_and_save_statistics_entropy_ood(
     --------
     dict : Statistics dictionary with ID, OOD, and combined statistics
     """
+    def normalize(values, vmin, vmax):
+        """Normalize values to [0, 1] range"""
+        if vmax - vmin == 0:
+            return np.zeros_like(values)
+        return (values - vmin) / (vmax - vmin)
+    
+    # Collect all entropy values for normalization (across all regions)
+    all_ale = np.concatenate([uncertainties_combined['ale']])
+    all_epi = np.concatenate([uncertainties_combined['epi']])
+    all_tot = np.concatenate([uncertainties_combined['tot']])
+    
+    # Compute min/max for normalization
+    ale_min, ale_max = all_ale.min(), all_ale.max()
+    epi_min, epi_max = all_epi.min(), all_epi.max()
+    tot_min, tot_max = all_tot.min(), all_tot.max()
+    
     # Process each region
     regions = [
         ('ID', uncertainties_id, mse_id),
@@ -535,46 +612,84 @@ def compute_and_save_statistics_entropy_ood(
     print(f"\n{'='*60}")
     print(f"OOD Experiment Statistics (Entropy) - {function_name} Function - {model_name}")
     print(f"{'='*60}")
-    print(f"\n{'Region':<12} {'Avg Aleatoric (nats)':<25} {'Avg Epistemic (nats)':<25} {'Avg Total (nats)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15}")
-    print("-" * 140)
+    header = f"\n{'Region':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15} {'NLL':<15} {'CRPS':<15} {'Spear_Ale':<15} {'Spear_Epi':<15}"
+    print(header)
+    print("-" * len(header))
+    
+    metrics_dict = {
+        'ID': {'nll': nll_id, 'crps': crps_id, 'spear_ale': spearman_aleatoric_id, 'spear_epi': spearman_epistemic_id},
+        'OOD': {'nll': nll_ood, 'crps': crps_ood, 'spear_ale': spearman_aleatoric_ood, 'spear_epi': spearman_epistemic_ood},
+        'Combined': {'nll': nll_combined, 'crps': crps_combined, 'spear_ale': spearman_aleatoric_combined, 'spear_epi': spearman_epistemic_combined}
+    }
     
     for region_name, uncertainties, mse in regions:
         ale_vals = uncertainties['ale']
         epi_vals = uncertainties['epi']
         tot_vals = uncertainties['tot']
         
-        avg_ale_entropy = np.mean(ale_vals)
-        avg_epi_entropy = np.mean(epi_vals)
-        avg_tot_entropy = np.mean(tot_vals)
+        # Normalize entropy values (ale and epi separately)
+        ale_norm = normalize(ale_vals, ale_min, ale_max)
+        epi_norm = normalize(epi_vals, epi_min, epi_max)
+        # Total is sum of normalized ale and epi (not normalized separately)
+        tot_norm = ale_norm + epi_norm
         
+        # Compute normalized averages
+        avg_ale_entropy_norm = np.mean(ale_norm)
+        avg_epi_entropy_norm = np.mean(epi_norm)
+        avg_tot_entropy_norm = np.mean(tot_norm)
+        
+        # Correlation computed on original (non-normalized) values
         correlation = np.corrcoef(epi_vals, ale_vals)[0, 1]
         if np.isnan(correlation):
             correlation = 0.0
         
-        print(f"{region_name:<12} {avg_ale_entropy:>24.6f}  {avg_epi_entropy:>24.6f}  {avg_tot_entropy:>24.6f}  {correlation:>24.6f}  {mse:>15.6f}")
+        # Get metrics for this region
+        metrics = metrics_dict[region_name]
+        nll_val = metrics['nll']
+        crps_val = metrics['crps']
+        spear_ale_val = metrics['spear_ale']
+        spear_epi_val = metrics['spear_epi']
         
-        # Save statistics for this region
+        # Print statistics
+        nll_str = f"{nll_val:>15.6f}" if nll_val is not None else f"{'N/A':>15}"
+        crps_str = f"{crps_val:>15.6f}" if crps_val is not None else f"{'N/A':>15}"
+        spear_ale_str = f"{spear_ale_val:>15.6f}" if spear_ale_val is not None else f"{'N/A':>15}"
+        spear_epi_str = f"{spear_epi_val:>15.6f}" if spear_epi_val is not None else f"{'N/A':>15}"
+        print_line = f"{region_name:<12} {avg_ale_entropy_norm:>24.6f}  {avg_epi_entropy_norm:>24.6f}  {avg_tot_entropy_norm:>24.6f}  {correlation:>24.6f}  {mse:>15.6f} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
+        print(print_line)
+        
+        # Save normalized statistics for this region
         stats_df, fig = save_summary_statistics_entropy_ood(
-            [avg_ale_entropy], [avg_epi_entropy], [avg_tot_entropy], [correlation], [mse],
+            [avg_ale_entropy_norm], [avg_epi_entropy_norm], [avg_tot_entropy_norm], [correlation], [mse],
             function_name, noise_type=noise_type,
             func_type=func_type, model_name=model_name, region_type=region_name,
-            date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+            date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
+            nll_list=[nll_val] if nll_val is not None else None,
+            crps_list=[crps_val] if crps_val is not None else None,
+            spearman_aleatoric_list=[spear_ale_val] if spear_ale_val is not None else None,
+            spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None
         )
-        plt.show()
-        plt.close(fig)
+        # Summary plots removed - only uncertainty plots with data points are displayed
+        if fig is not None:
+            plt.show()
+            plt.close(fig)
         
         results[region_name.lower()] = {
-            'avg_ale_entropy': avg_ale_entropy,
-            'avg_epi_entropy': avg_epi_entropy,
-            'avg_tot_entropy': avg_tot_entropy,
+            'avg_ale_norm': avg_ale_entropy_norm,
+            'avg_epi_norm': avg_epi_entropy_norm,
+            'avg_tot_norm': avg_tot_entropy_norm,
             'correlation': correlation,
             'mse': mse,
+            'nll': nll_val,
+            'crps': crps_val,
+            'spearman_aleatoric': spear_ale_val,
+            'spearman_epistemic': spear_epi_val,
             'stats_df': stats_df
         }
     
     print(f"\n{'='*60}")
-    print("Note: Entropy values are in nats (natural logarithm base)")
-    print("      Correlation is computed on entropy values")
+    print("Note: Average entropy values are normalized to [0, 1] range across all regions")
+    print("      Correlation is computed on original (non-normalized) entropy values")
     print(f"{'='*60}")
     
     return results
@@ -593,7 +708,7 @@ def run_mc_dropout_ood_experiment(
     seed: int = 42,
     p: float = 0.2,
     beta: float = 0.5,
-    epochs: int = 700,
+    epochs: int = 250,
     lr: float = 1e-3,
     batch_size: int = 32,
     mc_samples: int = 20,
@@ -740,6 +855,33 @@ def run_mc_dropout_ood_experiment(
         mse_ood = np.mean((mu_pred_flat[ood_mask] - y_grid_clean_flat[ood_mask])**2)
         mse_combined = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
         
+        # Compute predictive aggregation (μ*, σ*²)
+        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        
+        # Compute true noise variance for grid points
+        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+        
+        # Compute NLL, CRPS, and disentanglement metrics for each region
+        nll_id = compute_gaussian_nll(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
+        nll_ood = compute_gaussian_nll(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
+        nll_combined = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+        
+        crps_id = compute_crps_gaussian(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
+        crps_ood = compute_crps_gaussian(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
+        crps_combined = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+        
+        disentangle_id = compute_uncertainty_disentanglement(
+            y_grid_clean_flat[id_mask], mu_star[id_mask],
+            ale_var[id_mask], epi_var[id_mask], true_noise_var[id_mask]
+        )
+        disentangle_ood = compute_uncertainty_disentanglement(
+            y_grid_clean_flat[ood_mask], mu_star[ood_mask],
+            ale_var[ood_mask], epi_var[ood_mask], true_noise_var[ood_mask]
+        )
+        disentangle_combined = compute_uncertainty_disentanglement(
+            y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+        )
+        
         # Save raw model outputs
         save_model_outputs(
             mu_samples=mu_samples,
@@ -775,12 +917,38 @@ def run_mc_dropout_ood_experiment(
             func_type=func_type
         )
         
+        # Plot normalized variance-based uncertainties
+        plot_uncertainties_ood_normalized(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var, ood_mask,
+            title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - OOD - Variance",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
+        # Plot normalized entropy-based uncertainties
+        plot_uncertainties_entropy_ood_normalized(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask,
+            title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - OOD - Entropy",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
         # Compute and save variance-based statistics
         compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
-            date=date, dropout_p=p, mc_samples=mc_samples
+            date=date, dropout_p=p, mc_samples=mc_samples,
+            nll_id=nll_id, nll_ood=nll_ood, nll_combined=nll_combined,
+            crps_id=crps_id, crps_ood=crps_ood, crps_combined=crps_combined,
+            spearman_aleatoric_id=disentangle_id['spearman_aleatoric'],
+            spearman_aleatoric_ood=disentangle_ood['spearman_aleatoric'],
+            spearman_aleatoric_combined=disentangle_combined['spearman_aleatoric'],
+            spearman_epistemic_id=disentangle_id['spearman_epistemic'],
+            spearman_epistemic_ood=disentangle_ood['spearman_epistemic'],
+            spearman_epistemic_combined=disentangle_combined['spearman_epistemic']
         )
         
         # Compute and save entropy-based statistics
@@ -804,6 +972,7 @@ def run_deep_ensemble_ood_experiment(
     beta: float = 0.5,
     batch_size: int = 32,
     K: int = 5,
+    epochs: int = 250,
     parallel: bool = True,
     entropy_method: str = 'analytical'
 ):
@@ -882,7 +1051,7 @@ def run_deep_ensemble_ood_experiment(
         ensemble = train_ensemble_deep(
             x_train_norm, y_train,
             batch_size=batch_size, K=K,
-            loss_type='beta_nll', beta=beta, parallel=True
+            loss_type='beta_nll', beta=beta, parallel=True, epochs=epochs
         )
         
         # Make predictions with raw arrays for entropy computation
@@ -948,6 +1117,33 @@ def run_deep_ensemble_ood_experiment(
         mse_ood = np.mean((mu_pred_flat[ood_mask] - y_grid_clean_flat[ood_mask])**2)
         mse_combined = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
         
+        # Compute predictive aggregation (μ*, σ*²)
+        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        
+        # Compute true noise variance for grid points
+        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+        
+        # Compute NLL, CRPS, and disentanglement metrics for each region
+        nll_id = compute_gaussian_nll(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
+        nll_ood = compute_gaussian_nll(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
+        nll_combined = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+        
+        crps_id = compute_crps_gaussian(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
+        crps_ood = compute_crps_gaussian(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
+        crps_combined = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+        
+        disentangle_id = compute_uncertainty_disentanglement(
+            y_grid_clean_flat[id_mask], mu_star[id_mask],
+            ale_var[id_mask], epi_var[id_mask], true_noise_var[id_mask]
+        )
+        disentangle_ood = compute_uncertainty_disentanglement(
+            y_grid_clean_flat[ood_mask], mu_star[ood_mask],
+            ale_var[ood_mask], epi_var[ood_mask], true_noise_var[ood_mask]
+        )
+        disentangle_combined = compute_uncertainty_disentanglement(
+            y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+        )
+        
         # Save raw model outputs
         save_model_outputs(
             mu_samples=mu_samples,
@@ -982,12 +1178,38 @@ def run_deep_ensemble_ood_experiment(
             func_type=func_type
         )
         
+        # Plot normalized variance-based uncertainties
+        plot_uncertainties_ood_normalized(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var, ood_mask,
+            title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - OOD - Variance",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
+        # Plot normalized entropy-based uncertainties
+        plot_uncertainties_entropy_ood_normalized(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask,
+            title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - OOD - Entropy",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
         # Compute and save variance-based statistics
         compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
-            date=date, n_nets=K
+            date=date, n_nets=K,
+            nll_id=nll_id, nll_ood=nll_ood, nll_combined=nll_combined,
+            crps_id=crps_id, crps_ood=crps_ood, crps_combined=crps_combined,
+            spearman_aleatoric_id=disentangle_id['spearman_aleatoric'],
+            spearman_aleatoric_ood=disentangle_ood['spearman_aleatoric'],
+            spearman_aleatoric_combined=disentangle_combined['spearman_aleatoric'],
+            spearman_epistemic_id=disentangle_id['spearman_epistemic'],
+            spearman_epistemic_ood=disentangle_ood['spearman_epistemic'],
+            spearman_epistemic_combined=disentangle_combined['spearman_epistemic']
         )
         
         # Compute and save entropy-based statistics
@@ -1163,6 +1385,33 @@ def run_bnn_ood_experiment(
         mse_ood = np.mean((mu_pred_flat[ood_mask] - y_grid_clean_flat[ood_mask])**2)
         mse_combined = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
         
+        # Compute predictive aggregation (μ*, σ*²)
+        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        
+        # Compute true noise variance for grid points
+        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+        
+        # Compute NLL, CRPS, and disentanglement metrics for each region
+        nll_id = compute_gaussian_nll(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
+        nll_ood = compute_gaussian_nll(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
+        nll_combined = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+        
+        crps_id = compute_crps_gaussian(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
+        crps_ood = compute_crps_gaussian(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
+        crps_combined = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+        
+        disentangle_id = compute_uncertainty_disentanglement(
+            y_grid_clean_flat[id_mask], mu_star[id_mask],
+            ale_var[id_mask], epi_var[id_mask], true_noise_var[id_mask]
+        )
+        disentangle_ood = compute_uncertainty_disentanglement(
+            y_grid_clean_flat[ood_mask], mu_star[ood_mask],
+            ale_var[ood_mask], epi_var[ood_mask], true_noise_var[ood_mask]
+        )
+        disentangle_combined = compute_uncertainty_disentanglement(
+            y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+        )
+        
         # Save raw model outputs
         save_model_outputs(
             mu_samples=mu_samples,
@@ -1196,12 +1445,38 @@ def run_bnn_ood_experiment(
             func_type=func_type
         )
         
+        # Plot normalized variance-based uncertainties
+        plot_uncertainties_ood_normalized(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var, ood_mask,
+            title=f"BNN (Pyro NUTS) - {function_names[func_type]} - OOD - Variance",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
+        # Plot normalized entropy-based uncertainties
+        plot_uncertainties_entropy_ood_normalized(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask,
+            title=f"BNN (Pyro NUTS) - {function_names[func_type]} - OOD - Entropy",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
         # Compute and save variance-based statistics
         compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'BNN',
-            date=date
+            date=date,
+            nll_id=nll_id, nll_ood=nll_ood, nll_combined=nll_combined,
+            crps_id=crps_id, crps_ood=crps_ood, crps_combined=crps_combined,
+            spearman_aleatoric_id=disentangle_id['spearman_aleatoric'],
+            spearman_aleatoric_ood=disentangle_ood['spearman_aleatoric'],
+            spearman_aleatoric_combined=disentangle_combined['spearman_aleatoric'],
+            spearman_epistemic_id=disentangle_id['spearman_epistemic'],
+            spearman_epistemic_ood=disentangle_ood['spearman_epistemic'],
+            spearman_epistemic_combined=disentangle_combined['spearman_epistemic']
         )
         
         # Compute and save entropy-based statistics
@@ -1359,6 +1634,33 @@ def run_bamlss_ood_experiment(
         mse_ood = np.mean((mu_pred_flat[ood_mask] - y_grid_clean_flat[ood_mask])**2)
         mse_combined = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
         
+        # Compute predictive aggregation (μ*, σ*²)
+        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        
+        # Compute true noise variance for grid points
+        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+        
+        # Compute NLL, CRPS, and disentanglement metrics for each region
+        nll_id = compute_gaussian_nll(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
+        nll_ood = compute_gaussian_nll(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
+        nll_combined = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+        
+        crps_id = compute_crps_gaussian(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
+        crps_ood = compute_crps_gaussian(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
+        crps_combined = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+        
+        disentangle_id = compute_uncertainty_disentanglement(
+            y_grid_clean_flat[id_mask], mu_star[id_mask],
+            ale_var[id_mask], epi_var[id_mask], true_noise_var[id_mask]
+        )
+        disentangle_ood = compute_uncertainty_disentanglement(
+            y_grid_clean_flat[ood_mask], mu_star[ood_mask],
+            ale_var[ood_mask], epi_var[ood_mask], true_noise_var[ood_mask]
+        )
+        disentangle_combined = compute_uncertainty_disentanglement(
+            y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+        )
+        
         # Save raw model outputs
         save_model_outputs(
             mu_samples=mu_samples,
@@ -1392,12 +1694,38 @@ def run_bamlss_ood_experiment(
             func_type=func_type
         )
         
+        # Plot normalized variance-based uncertainties
+        plot_uncertainties_ood_normalized(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var, ood_mask,
+            title=f"BAMLSS - {function_names[func_type]} - OOD - Variance",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
+        # Plot normalized entropy-based uncertainties
+        plot_uncertainties_entropy_ood_normalized(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask,
+            title=f"BAMLSS - {function_names[func_type]} - OOD - Entropy",
+            noise_type=noise_type,
+            func_type=func_type
+        )
+        
         # Compute and save variance-based statistics
         compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
-            date=date
+            date=date,
+            nll_id=nll_id, nll_ood=nll_ood, nll_combined=nll_combined,
+            crps_id=crps_id, crps_ood=crps_ood, crps_combined=crps_combined,
+            spearman_aleatoric_id=disentangle_id['spearman_aleatoric'],
+            spearman_aleatoric_ood=disentangle_ood['spearman_aleatoric'],
+            spearman_aleatoric_combined=disentangle_combined['spearman_aleatoric'],
+            spearman_epistemic_id=disentangle_id['spearman_epistemic'],
+            spearman_epistemic_ood=disentangle_ood['spearman_epistemic'],
+            spearman_epistemic_combined=disentangle_combined['spearman_epistemic']
         )
         
         # Compute and save entropy-based statistics

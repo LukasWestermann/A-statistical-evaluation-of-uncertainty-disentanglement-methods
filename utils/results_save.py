@@ -91,14 +91,12 @@ def save_statistics(data_dict, filename, subfolder='', save_excel=True):
     # Save as CSV
     csv_filepath = save_dir / f"{sanitize_filename(filename)}.csv"
     df.to_csv(csv_filepath, index=False)
-    print(f"Saved statistics (CSV): {csv_filepath}")
     
     # Save as Excel if requested
     if save_excel:
         try:
             excel_filepath = save_dir / f"{sanitize_filename(filename)}.xlsx"
             df.to_excel(excel_filepath, index=False, engine='openpyxl')
-            print(f"Saved statistics (Excel): {excel_filepath}")
             return csv_filepath, excel_filepath
         except ImportError:
             print("Warning: openpyxl not available. Excel file not saved. Only CSV saved.")
@@ -129,7 +127,9 @@ def save_summary_text(text, filename, subfolder=''):
 def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list, 
                            avg_tot_norm_list, correlation_list, function_name, 
                            noise_type='heteroscedastic', func_type='', model_name='',
-                           mse_list=None, date=None, dropout_p=None, mc_samples=None, n_nets=None):
+                           mse_list=None, date=None, dropout_p=None, mc_samples=None, n_nets=None,
+                           nll_list=None, crps_list=None,
+                           spearman_aleatoric_list=None, spearman_epistemic_list=None):
     """Helper function to save summary statistics and create summary plot
     
     Args:
@@ -163,6 +163,12 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
     # Add MSE if provided
     if mse_list is not None:
         stats_dict['MSE'] = mse_list
+    
+    # Always add new metrics columns (use provided values or None)
+    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * len(percentages)
+    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * len(percentages)
+    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * len(percentages)
+    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * len(percentages)
     
     stats_df = pd.DataFrame(stats_dict)
     
@@ -263,7 +269,9 @@ def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_n
                                        avg_tot_norm_list, correlation_list, mse_list,
                                        function_name, distribution='normal',
                                        noise_type='heteroscedastic', func_type='', model_name='',
-                                       date=None, dropout_p=None, mc_samples=None, n_nets=None):
+                                       date=None, dropout_p=None, mc_samples=None, n_nets=None,
+                                       nll_list=None, crps_list=None,
+                                       spearman_aleatoric_list=None, spearman_epistemic_list=None):
     """Helper function to save summary statistics and create summary plot for noise level experiments
     
     Args:
@@ -287,7 +295,7 @@ def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_n
         tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
     """
     # Create DataFrame with summary statistics
-    stats_df = pd.DataFrame({
+    stats_dict = {
         'Tau': tau_values,
         'Distribution': [distribution] * len(tau_values),
         'Avg_Aleatoric_norm': avg_ale_norm_list,
@@ -295,7 +303,15 @@ def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_n
         'Avg_Total_norm': avg_tot_norm_list,
         'Correlation_Epi_Ale': correlation_list,
         'MSE': mse_list
-    })
+    }
+    
+    # Always add new metrics columns (use provided values or None)
+    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * len(tau_values)
+    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * len(tau_values)
+    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * len(tau_values)
+    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * len(tau_values)
+    
+    stats_df = pd.DataFrame(stats_dict)
     
     # Build filename with optional date and model parameters
     base_filename = f"uncertainties_summary_{function_name}_{noise_type}_{distribution}"
@@ -385,8 +401,10 @@ def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list,
                                 avg_tot_norm_list, correlation_list, mse_list,
                                 function_name, noise_type='heteroscedastic', 
                                 func_type='', model_name='', region_type='ID',
-                                date=None, dropout_p=None, mc_samples=None, n_nets=None):
-    """Helper function to save summary statistics and create summary plot for OOD experiments
+                                date=None, dropout_p=None, mc_samples=None, n_nets=None,
+                                nll_list=None, crps_list=None,
+                                spearman_aleatoric_list=None, spearman_epistemic_list=None):
+    """Helper function to save summary statistics for OOD experiments
     
     Args:
         avg_ale_norm_list: List of normalized average aleatoric uncertainties
@@ -403,23 +421,33 @@ def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list,
         dropout_p: Optional dropout probability for MC Dropout (float)
         mc_samples: Optional number of MC samples for MC Dropout (int)
         n_nets: Optional number of nets for Deep Ensemble (int)
+        nll_list: Optional list of NLL values
+        crps_list: Optional list of CRPS values
+        spearman_aleatoric_list: Optional list of Spearman correlations (aleatoric)
+        spearman_epistemic_list: Optional list of Spearman correlations (epistemic)
     
     Returns:
-        tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
+        tuple: (stats_df, None) - DataFrame with statistics (plots removed, only uncertainty plots with data points are displayed)
     """
     # Create DataFrame with summary statistics
     stats_dict = {
-        'Avg_Aleatoric_norm': avg_ale_norm_list,
-        'Avg_Epistemic_norm': avg_epi_norm_list,
-        'Avg_Total_norm': avg_tot_norm_list,
+        'Avg_Aleatoric_Variance': avg_ale_norm_list,
+        'Avg_Epistemic_Variance': avg_epi_norm_list,
+        'Avg_Total_Variance': avg_tot_norm_list,
         'Correlation_Epi_Ale': correlation_list,
         'MSE': mse_list
     }
     
+    # Always add new metrics columns (use provided values or None)
+    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * len(avg_ale_norm_list)
+    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * len(avg_ale_norm_list)
+    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * len(avg_ale_norm_list)
+    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * len(avg_ale_norm_list)
+    
     stats_df = pd.DataFrame(stats_dict)
     
     # Build filename with optional date and model parameters
-    base_filename = f"{region_type}_uncertainties_summary_{function_name}_{noise_type}"
+    base_filename = f"{region_type}_uncertainties_summary_{function_name}_{noise_type}_variance"
     
     # Build parameter strings
     param_parts = []
@@ -451,64 +479,19 @@ def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list,
     save_statistics(stats_df, filename, 
                     subfolder=f"ood/{noise_type}/{func_type}", save_excel=True)
     
-    # Create and save summary plots
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 6))
+    # Summary plots removed - only uncertainty plots with data points are displayed
+    # All statistics are printed to console and saved to Excel/CSV
     
-    # Add model name and region type to title if provided
-    title_suffix = f" - {model_name} ({region_type})" if model_name else f" ({region_type})"
-    
-    # Create dummy x-axis (single value since we're comparing ID vs OOD, not percentages)
-    x_axis = [0]  # Single point for comparison
-    
-    # Plot 1: Normalized Average Uncertainties
-    ax1.bar([0.2, 0.4, 0.6], [avg_ale_norm_list[0], avg_epi_norm_list[0], avg_tot_norm_list[0]], 
-            width=0.15, color=['green', 'orange', 'blue'], 
-            label=['Aleatoric', 'Epistemic', 'Total'])
-    ax1.set_ylabel('Normalized Average Uncertainty', fontsize=12)
-    ax1.set_title(f'Normalized Average Uncertainties\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax1.set_xticks([0.2, 0.4, 0.6])
-    ax1.set_xticklabels(['Aleatoric', 'Epistemic', 'Total'])
-    ax1.legend(fontsize=10, loc='best')
-    ax1.grid(True, alpha=0.3, axis='y')
-    ax1.set_ylim(0, 1.05)
-    
-    # Plot 2: Correlation between Epistemic and Aleatoric Uncertainties
-    ax2.bar([0.5], [correlation_list[0]], width=0.3, color='purple', label='Correlation (Epi-Ale)')
-    ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-    ax2.set_ylabel('Correlation Coefficient', fontsize=12)
-    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax2.set_xticks([0.5])
-    ax2.set_xticklabels(['Correlation'])
-    ax2.legend(fontsize=10, loc='best')
-    ax2.grid(True, alpha=0.3, axis='y')
-    ax2.set_ylim(-1.05, 1.05)
-    
-    # Plot 3: MSE
-    ax3.bar([0.5], [mse_list[0]], width=0.3, color='red', label='MSE')
-    ax3.set_ylabel('Mean Squared Error', fontsize=12)
-    ax3.set_title(f'MSE\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax3.set_xticks([0.5])
-    ax3.set_xticklabels(['MSE'])
-    ax3.legend(fontsize=10, loc='best')
-    ax3.grid(True, alpha=0.3, axis='y')
-    ax3.set_yscale('log')  # Use log scale for MSE as it can vary widely
-    
-    plt.tight_layout()
-    
-    save_plot(fig, filename, 
-              subfolder=f"ood/{noise_type}/{func_type}")
-    
-    return stats_df, fig
+    return stats_df, None
 
 def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list, 
                                          avg_tot_norm_list, correlation_list, mse_list,
                                          function_name, noise_type='heteroscedastic', 
                                          func_type='', model_name='', region_name='Region',
                                          date=None, dropout_p=None, mc_samples=None, n_nets=None,
-                                         density_factor=None):
+                                         density_factor=None,
+                                         nll_list=None, crps_list=None,
+                                         spearman_aleatoric_list=None, spearman_epistemic_list=None):
     """Helper function to save summary statistics and create summary plot for undersampling experiments
     
     Args:
@@ -539,6 +522,12 @@ def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list,
         'Correlation_Epi_Ale': correlation_list,
         'MSE': mse_list
     }
+    
+    # Always add new metrics columns (use provided values or None)
+    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * len(avg_ale_norm_list)
+    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * len(avg_ale_norm_list)
+    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * len(avg_ale_norm_list)
+    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * len(avg_ale_norm_list)
     
     stats_df = pd.DataFrame(stats_dict)
     
@@ -637,13 +626,13 @@ def save_summary_statistics_entropy(percentages, avg_ale_entropy_list, avg_epi_e
                                    avg_tot_entropy_list, correlation_list, function_name, 
                                    noise_type='heteroscedastic', func_type='', model_name='',
                                    mse_list=None, date=None, dropout_p=None, mc_samples=None, n_nets=None):
-    """Helper function to save entropy-based summary statistics and create summary plot
+    """Helper function to save normalized entropy-based summary statistics and create summary plot
     
     Args:
         percentages: List of training data percentages
-        avg_ale_entropy_list: List of average aleatoric entropies (nats)
-        avg_epi_entropy_list: List of average epistemic entropies (nats)
-        avg_tot_entropy_list: List of average total entropies (nats)
+        avg_ale_entropy_list: List of normalized average aleatoric entropies (in [0, 1])
+        avg_epi_entropy_list: List of normalized average epistemic entropies (in [0, 1])
+        avg_tot_entropy_list: List of normalized average total entropies (in [0, 1])
         correlation_list: List of correlations between epistemic and aleatoric uncertainties
         function_name: Name of the function (e.g., 'Linear', 'Sinusoidal')
         noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
@@ -661,9 +650,9 @@ def save_summary_statistics_entropy(percentages, avg_ale_entropy_list, avg_epi_e
     # Create DataFrame with summary statistics
     stats_dict = {
         'Percentage': percentages,
-        'Avg_Aleatoric_Entropy': avg_ale_entropy_list,
-        'Avg_Epistemic_Entropy': avg_epi_entropy_list,
-        'Avg_Total_Entropy': avg_tot_entropy_list,
+        'Avg_Aleatoric_Entropy_norm': avg_ale_entropy_list,
+        'Avg_Epistemic_Entropy_norm': avg_epi_entropy_list,
+        'Avg_Total_Entropy_norm': avg_tot_entropy_list,
         'Correlation_Epi_Ale': correlation_list
     }
     
@@ -721,8 +710,8 @@ def save_summary_statistics_entropy(percentages, avg_ale_entropy_list, avg_epi_e
     ax1.plot(percentages, avg_tot_entropy_list, '^-', linewidth=2, markersize=8, 
              label='Total Entropy', color='blue')
     ax1.set_xlabel('Training Data Percentage (%)', fontsize=12)
-    ax1.set_ylabel('Average Entropy (nats)', fontsize=12)
-    ax1.set_title(f'Average Entropies vs Training Data Percentage\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
+    ax1.set_ylabel('Normalized Average Entropy', fontsize=12)
+    ax1.set_title(f'Normalized Average Entropies vs Training Data Percentage\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
                   fontsize=13, fontweight='bold')
     ax1.legend(fontsize=10, loc='best')
     ax1.grid(True, alpha=0.3)
@@ -767,13 +756,13 @@ def save_summary_statistics_entropy_noise_level(tau_values, avg_ale_entropy_list
                                                function_name, distribution='normal',
                                                noise_type='heteroscedastic', func_type='', model_name='',
                                                date=None, dropout_p=None, mc_samples=None, n_nets=None):
-    """Helper function to save entropy-based summary statistics for noise level experiments
+    """Helper function to save normalized entropy-based summary statistics for noise level experiments
     
     Args:
         tau_values: List of tau (noise level) values
-        avg_ale_entropy_list: List of average aleatoric entropies (nats)
-        avg_epi_entropy_list: List of average epistemic entropies (nats)
-        avg_tot_entropy_list: List of average total entropies (nats)
+        avg_ale_entropy_list: List of normalized average aleatoric entropies (in [0, 1])
+        avg_epi_entropy_list: List of normalized average epistemic entropies (in [0, 1])
+        avg_tot_entropy_list: List of normalized average total entropies (in [0, 1])
         correlation_list: List of correlations between epistemic and aleatoric uncertainties
         mse_list: List of MSE values
         function_name: Name of the function (e.g., 'Linear', 'Sinusoidal')
@@ -792,9 +781,9 @@ def save_summary_statistics_entropy_noise_level(tau_values, avg_ale_entropy_list
     stats_df = pd.DataFrame({
         'Tau': tau_values,
         'Distribution': [distribution] * len(tau_values),
-        'Avg_Aleatoric_Entropy': avg_ale_entropy_list,
-        'Avg_Epistemic_Entropy': avg_epi_entropy_list,
-        'Avg_Total_Entropy': avg_tot_entropy_list,
+        'Avg_Aleatoric_Entropy_norm': avg_ale_entropy_list,
+        'Avg_Epistemic_Entropy_norm': avg_epi_entropy_list,
+        'Avg_Total_Entropy_norm': avg_tot_entropy_list,
         'Correlation_Epi_Ale': correlation_list,
         'MSE': mse_list
     })
@@ -838,8 +827,8 @@ def save_summary_statistics_entropy_noise_level(tau_values, avg_ale_entropy_list
     ax1.plot(tau_values, avg_tot_entropy_list, '^-', linewidth=2, markersize=8, 
              label='Total Entropy', color='blue')
     ax1.set_xlabel('Tau (Noise Level)', fontsize=12)
-    ax1.set_ylabel('Average Entropy (nats)', fontsize=12)
-    ax1.set_title(f'Average Entropies vs Noise Level\n{function_name} Function ({noise_type.capitalize()}, {distribution}){title_suffix}', 
+    ax1.set_ylabel('Normalized Average Entropy', fontsize=12)
+    ax1.set_title(f'Normalized Average Entropies vs Noise Level\n{function_name} Function ({noise_type.capitalize()}, {distribution}){title_suffix}', 
                   fontsize=13, fontweight='bold')
     ax1.legend(fontsize=10, loc='best')
     ax1.grid(True, alpha=0.3)
@@ -879,13 +868,15 @@ def save_summary_statistics_entropy_ood(avg_ale_entropy_list, avg_epi_entropy_li
                                        avg_tot_entropy_list, correlation_list, mse_list,
                                        function_name, noise_type='heteroscedastic', 
                                        func_type='', model_name='', region_type='ID',
-                                       date=None, dropout_p=None, mc_samples=None, n_nets=None):
-    """Helper function to save entropy-based summary statistics for OOD experiments
+                                       date=None, dropout_p=None, mc_samples=None, n_nets=None,
+                                       nll_list=None, crps_list=None,
+                                       spearman_aleatoric_list=None, spearman_epistemic_list=None):
+    """Helper function to save normalized entropy-based summary statistics for OOD experiments
     
     Args:
-        avg_ale_entropy_list: List of average aleatoric entropies (nats)
-        avg_epi_entropy_list: List of average epistemic entropies (nats)
-        avg_tot_entropy_list: List of average total entropies (nats)
+        avg_ale_entropy_list: List of normalized average aleatoric entropies (in [0, 1])
+        avg_epi_entropy_list: List of normalized average epistemic entropies (in [0, 1])
+        avg_tot_entropy_list: List of normalized average total entropies (in [0, 1])
         correlation_list: List of correlations between epistemic and aleatoric uncertainties
         mse_list: List of MSE values
         function_name: Name of the function (e.g., 'Linear', 'Sinusoidal')
@@ -897,17 +888,31 @@ def save_summary_statistics_entropy_ood(avg_ale_entropy_list, avg_epi_entropy_li
         dropout_p: Optional dropout probability for MC Dropout (float)
         mc_samples: Optional number of MC samples for MC Dropout (int)
         n_nets: Optional number of nets for Deep Ensemble (int)
+        nll_list: Optional list of NLL values
+        crps_list: Optional list of CRPS values
+        spearman_aleatoric_list: Optional list of Spearman correlations (aleatoric)
+        spearman_epistemic_list: Optional list of Spearman correlations (epistemic)
+        nll_list: Optional list of NLL values
+        crps_list: Optional list of CRPS values
+        spearman_aleatoric_list: Optional list of Spearman correlations (aleatoric)
+        spearman_epistemic_list: Optional list of Spearman correlations (epistemic)
     
     Returns:
-        tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
+        tuple: (stats_df, None) - DataFrame with statistics (plots removed, only uncertainty plots with data points are displayed)
     """
     stats_dict = {
-        'Avg_Aleatoric_Entropy': avg_ale_entropy_list,
-        'Avg_Epistemic_Entropy': avg_epi_entropy_list,
-        'Avg_Total_Entropy': avg_tot_entropy_list,
+        'Avg_Aleatoric_Entropy_norm': avg_ale_entropy_list,
+        'Avg_Epistemic_Entropy_norm': avg_epi_entropy_list,
+        'Avg_Total_Entropy_norm': avg_tot_entropy_list,
         'Correlation_Epi_Ale': correlation_list,
         'MSE': mse_list
     }
+    
+    # Always add new metrics columns (use provided values or None)
+    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * len(avg_ale_entropy_list)
+    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * len(avg_ale_entropy_list)
+    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * len(avg_ale_entropy_list)
+    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * len(avg_ale_entropy_list)
     
     stats_df = pd.DataFrame(stats_dict)
     
@@ -939,50 +944,10 @@ def save_summary_statistics_entropy_ood(avg_ale_entropy_list, avg_epi_entropy_li
     save_statistics(stats_df, filename, 
                     subfolder=f"ood/{noise_type}/{func_type}", save_excel=True)
     
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 6))
-    title_suffix = f" - {model_name}" if model_name else ""
+    # Summary plots removed - only uncertainty plots with data points are displayed
+    # All statistics are printed to console and saved to Excel/CSV
     
-    # Plot 1: Average Entropies (bar chart for single value)
-    ax1.bar([0.3, 0.5, 0.7], [avg_ale_entropy_list[0], avg_epi_entropy_list[0], avg_tot_entropy_list[0]], 
-            width=0.15, color=['green', 'orange', 'blue'], 
-            label=['Aleatoric', 'Epistemic', 'Total'])
-    ax1.set_ylabel('Average Entropy (nats)', fontsize=12)
-    ax1.set_title(f'Average Entropies ({region_type})\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax1.set_xticks([0.3, 0.5, 0.7])
-    ax1.set_xticklabels(['Aleatoric', 'Epistemic', 'Total'])
-    ax1.legend(fontsize=10, loc='best')
-    ax1.grid(True, alpha=0.3, axis='y')
-    
-    # Plot 2: Correlation
-    ax2.bar([0.5], [correlation_list[0]], width=0.3, color='purple', label='Correlation (Epi-Ale)')
-    ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-    ax2.set_ylabel('Correlation Coefficient', fontsize=12)
-    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax2.set_xticks([0.5])
-    ax2.set_xticklabels(['Correlation'])
-    ax2.legend(fontsize=10, loc='best')
-    ax2.grid(True, alpha=0.3, axis='y')
-    ax2.set_ylim(-1.05, 1.05)
-    
-    # Plot 3: MSE
-    ax3.bar([0.5], [mse_list[0]], width=0.3, color='red', label='MSE')
-    ax3.set_ylabel('Mean Squared Error', fontsize=12)
-    ax3.set_title(f'MSE ({region_type})\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
-                  fontsize=13, fontweight='bold')
-    ax3.set_xticks([0.5])
-    ax3.set_xticklabels(['MSE'])
-    ax3.legend(fontsize=10, loc='best')
-    ax3.grid(True, alpha=0.3, axis='y')
-    ax3.set_yscale('log')
-    
-    plt.tight_layout()
-    
-    save_plot(fig, filename, 
-              subfolder=f"ood/{noise_type}/{func_type}")
-    
-    return stats_df, fig
+    return stats_df, None
 
 
 def save_summary_statistics_entropy_undersampling(avg_ale_entropy_list, avg_epi_entropy_list, 
@@ -991,12 +956,12 @@ def save_summary_statistics_entropy_undersampling(avg_ale_entropy_list, avg_epi_
                                                   func_type='', model_name='', region_name='Region',
                                                   date=None, dropout_p=None, mc_samples=None, n_nets=None,
                                                   density_factor=None):
-    """Helper function to save entropy-based summary statistics for undersampling experiments
+    """Helper function to save normalized entropy-based summary statistics for undersampling experiments
     
     Args:
-        avg_ale_entropy_list: List of average aleatoric entropies (nats)
-        avg_epi_entropy_list: List of average epistemic entropies (nats)
-        avg_tot_entropy_list: List of average total entropies (nats)
+        avg_ale_entropy_list: List of normalized average aleatoric entropies (in [0, 1])
+        avg_epi_entropy_list: List of normalized average epistemic entropies (in [0, 1])
+        avg_tot_entropy_list: List of normalized average total entropies (in [0, 1])
         correlation_list: List of correlations between epistemic and aleatoric uncertainties
         mse_list: List of MSE values
         function_name: Name of the function (e.g., 'Linear', 'Sinusoidal')
@@ -1014,9 +979,9 @@ def save_summary_statistics_entropy_undersampling(avg_ale_entropy_list, avg_epi_
         tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
     """
     stats_dict = {
-        'Avg_Aleatoric_Entropy': avg_ale_entropy_list,
-        'Avg_Epistemic_Entropy': avg_epi_entropy_list,
-        'Avg_Total_Entropy': avg_tot_entropy_list,
+        'Avg_Aleatoric_Entropy_norm': avg_ale_entropy_list,
+        'Avg_Epistemic_Entropy_norm': avg_epi_entropy_list,
+        'Avg_Total_Entropy_norm': avg_tot_entropy_list,
         'Correlation_Epi_Ale': correlation_list,
         'MSE': mse_list
     }
@@ -1060,8 +1025,8 @@ def save_summary_statistics_entropy_undersampling(avg_ale_entropy_list, avg_epi_
     ax1.bar([0.3, 0.5, 0.7], [avg_ale_entropy_list[0], avg_epi_entropy_list[0], avg_tot_entropy_list[0]], 
             width=0.15, color=['green', 'orange', 'blue'], 
             label=['Aleatoric', 'Epistemic', 'Total'])
-    ax1.set_ylabel('Average Entropy (nats)', fontsize=12)
-    ax1.set_title(f'Average Entropies ({region_name})\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
+    ax1.set_ylabel('Normalized Average Entropy', fontsize=12)
+    ax1.set_title(f'Normalized Average Entropies ({region_name})\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
                   fontsize=13, fontweight='bold')
     ax1.set_xticks([0.3, 0.5, 0.7])
     ax1.set_xticklabels(['Aleatoric', 'Epistemic', 'Total'])

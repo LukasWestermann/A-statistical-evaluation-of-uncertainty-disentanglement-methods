@@ -22,6 +22,13 @@ from utils.results_save import save_summary_statistics_undersampling, save_model
 from utils.plotting import plot_uncertainties_undersampling
 from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 from utils.device import get_device_for_worker, get_num_gpus
+from utils.metrics import (
+    compute_predictive_aggregation,
+    compute_gaussian_nll,
+    compute_crps_gaussian,
+    compute_true_noise_variance,
+    compute_uncertainty_disentanglement
+)
 
 # Set multiprocessing start method for CUDA support (Linux: can use 'fork' or 'spawn')
 # Using 'spawn' for better CUDA compatibility
@@ -229,7 +236,7 @@ def _train_single_undersampling_mc_dropout(args):
 def _train_single_undersampling_deep_ensemble(args):
     """Wrapper function for training Deep Ensemble for undersampling experiment (for parallel execution)."""
     (worker_id, x_train, y_train, x_grid, y_grid_clean, region_masks,
-     seed, beta, batch_size, K, func_type, noise_type, entropy_method) = args
+     seed, beta, batch_size, K, epochs, func_type, noise_type, entropy_method) = args
     
     # Set device for this worker
     device = get_device_for_worker(worker_id)
@@ -257,7 +264,7 @@ def _train_single_undersampling_deep_ensemble(args):
     ensemble = train_ensemble_deep(
         x_train_norm, y_train,
         batch_size=batch_size, K=K,
-        loss_type='beta_nll', beta=beta, parallel=True
+        loss_type='beta_nll', beta=beta, parallel=True, epochs=epochs
     )
     
     # Make predictions with raw arrays
@@ -377,7 +384,11 @@ def compute_and_save_statistics_undersampling(
     date: str = None,
     dropout_p: float = None,
     mc_samples: int = None,
-    n_nets: int = None
+    n_nets: int = None,
+    nll_by_region: list = None,
+    crps_by_region: list = None,
+    spearman_aleatoric_by_region: list = None,
+    spearman_epistemic_by_region: list = None
 ):
     """
     Shared function to compute normalized statistics and save results for undersampling experiments.
@@ -434,8 +445,9 @@ def compute_and_save_statistics_undersampling(
     print(f"\n{'='*60}")
     print(f"Undersampling Experiment Statistics - {function_name} Function - {model_name}")
     print(f"{'='*60}")
-    print(f"\n{'Region':<15} {'Density':<12} {'Avg Ale (norm)':<20} {'Avg Epi (norm)':<20} {'Avg Tot (norm)':<20} {'Correlation':<15} {'MSE':<15}")
-    print("-" * 140)
+    header = f"\n{'Region':<15} {'Density':<12} {'Avg Ale (norm)':<20} {'Avg Epi (norm)':<20} {'Avg Tot (norm)':<20} {'Correlation':<15} {'MSE':<15} {'NLL':<15} {'CRPS':<15} {'Spear_Ale':<15} {'Spear_Epi':<15}"
+    print(header)
+    print("-" * len(header))
     
     for idx, ((region_tuple, density_factor), uncertainties, mse) in enumerate(
         zip(sampling_regions, uncertainties_by_region, mse_by_region)
@@ -458,7 +470,19 @@ def compute_and_save_statistics_undersampling(
         if np.isnan(correlation):
             correlation = 0.0
         
-        print(f"{region_name:<15} {density_factor:<12.2f} {avg_ale_norm:>19.6f}  {avg_epi_norm:>19.6f}  {avg_tot_norm:>19.6f}  {correlation:>14.6f}  {mse:>14.6f}")
+        # Get metrics for this region
+        nll_val = nll_by_region[idx] if nll_by_region is not None else None
+        crps_val = crps_by_region[idx] if crps_by_region is not None else None
+        spear_ale_val = spearman_aleatoric_by_region[idx] if spearman_aleatoric_by_region is not None else None
+        spear_epi_val = spearman_epistemic_by_region[idx] if spearman_epistemic_by_region is not None else None
+        
+        # Print statistics
+        nll_str = f"{nll_val:>14.6f}" if nll_val is not None else f"{'N/A':>14}"
+        crps_str = f"{crps_val:>14.6f}" if crps_val is not None else f"{'N/A':>14}"
+        spear_ale_str = f"{spear_ale_val:>14.6f}" if spear_ale_val is not None else f"{'N/A':>14}"
+        spear_epi_str = f"{spear_epi_val:>14.6f}" if spear_epi_val is not None else f"{'N/A':>14}"
+        print_line = f"{region_name:<15} {density_factor:<12.2f} {avg_ale_norm:>19.6f}  {avg_epi_norm:>19.6f}  {avg_tot_norm:>19.6f}  {correlation:>14.6f}  {mse:>14.6f} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
+        print(print_line)
         
         # Save statistics for this region
         stats_df, fig = save_summary_statistics_undersampling(
@@ -466,7 +490,11 @@ def compute_and_save_statistics_undersampling(
             function_name, noise_type=noise_type,
             func_type=func_type, model_name=model_name, region_name=region_name,
             date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
-            density_factor=density_factor
+            density_factor=density_factor,
+            nll_list=[nll_val] if nll_val is not None else None,
+            crps_list=[crps_val] if crps_val is not None else None,
+            spearman_aleatoric_list=[spear_ale_val] if spear_ale_val is not None else None,
+            spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None
         )
         plt.show()
         plt.close(fig)
@@ -478,6 +506,10 @@ def compute_and_save_statistics_undersampling(
             'correlation': correlation,
             'mse': mse,
             'density_factor': density_factor,
+            'nll': nll_val,
+            'crps': crps_val,
+            'spearman_aleatoric': spear_ale_val,
+            'spearman_epistemic': spear_epi_val,
             'stats_df': stats_df
         }
     
@@ -607,7 +639,7 @@ def compute_and_save_statistics_entropy_undersampling(
     n_nets: int = None
 ):
     """
-    Compute and save entropy-based statistics for undersampling experiments.
+    Compute and save normalized entropy-based statistics for undersampling experiments.
     
     Parameters:
     -----------
@@ -640,12 +672,28 @@ def compute_and_save_statistics_entropy_undersampling(
     """
     from utils.results_save import save_summary_statistics_entropy_undersampling
     
+    def normalize(values, vmin, vmax):
+        """Normalize values to [0, 1] range"""
+        if vmax - vmin == 0:
+            return np.zeros_like(values)
+        return (values - vmin) / (vmax - vmin)
+    
+    # Collect all entropy values for normalization (across all regions)
+    all_ale = np.concatenate([unc['ale'] for unc in uncertainties_entropy_by_region])
+    all_epi = np.concatenate([unc['epi'] for unc in uncertainties_entropy_by_region])
+    all_tot = np.concatenate([unc['tot'] for unc in uncertainties_entropy_by_region])
+    
+    # Compute min/max for normalization
+    ale_min, ale_max = all_ale.min(), all_ale.max()
+    epi_min, epi_max = all_epi.min(), all_epi.max()
+    tot_min, tot_max = all_tot.min(), all_tot.max()
+    
     results = {}
     
     print(f"\n{'='*60}")
     print(f"Undersampling Experiment Statistics (Entropy) - {function_name} Function - {model_name}")
     print(f"{'='*60}")
-    print(f"\n{'Region':<15} {'Density':<12} {'Avg Ale Entropy':<20} {'Avg Epi Entropy':<20} {'Avg Tot Entropy':<20} {'Correlation':<15} {'MSE':<15}")
+    print(f"\n{'Region':<15} {'Density':<12} {'Avg Ale (norm)':<20} {'Avg Epi (norm)':<20} {'Avg Tot (norm)':<20} {'Correlation':<15} {'MSE':<15}")
     print("-" * 140)
     
     for idx, ((region_tuple, density_factor), uncertainties, mse) in enumerate(
@@ -657,19 +705,27 @@ def compute_and_save_statistics_entropy_undersampling(
         epi_entropy = uncertainties['epi']
         tot_entropy = uncertainties['tot']
         
-        avg_ale_entropy = np.mean(ale_entropy)
-        avg_epi_entropy = np.mean(epi_entropy)
-        avg_tot_entropy = np.mean(tot_entropy)
+        # Normalize entropy values (ale and epi separately)
+        ale_norm = normalize(ale_entropy, ale_min, ale_max)
+        epi_norm = normalize(epi_entropy, epi_min, epi_max)
+        # Total is sum of normalized ale and epi (not normalized separately)
+        tot_norm = ale_norm + epi_norm
         
+        # Compute normalized averages
+        avg_ale_entropy_norm = np.mean(ale_norm)
+        avg_epi_entropy_norm = np.mean(epi_norm)
+        avg_tot_entropy_norm = np.mean(tot_norm)
+        
+        # Correlation computed on original (non-normalized) values
         correlation = np.corrcoef(epi_entropy, ale_entropy)[0, 1]
         if np.isnan(correlation):
             correlation = 0.0
         
-        print(f"{region_name:<15} {density_factor:<12.2f} {avg_ale_entropy:>19.6f}  {avg_epi_entropy:>19.6f}  {avg_tot_entropy:>19.6f}  {correlation:>14.6f}  {mse:>14.6f}")
+        print(f"{region_name:<15} {density_factor:<12.2f} {avg_ale_entropy_norm:>19.6f}  {avg_epi_entropy_norm:>19.6f}  {avg_tot_entropy_norm:>19.6f}  {correlation:>14.6f}  {mse:>14.6f}")
         
-        # Save statistics for this region
+        # Save normalized statistics for this region
         stats_df, fig = save_summary_statistics_entropy_undersampling(
-            [avg_ale_entropy], [avg_epi_entropy], [avg_tot_entropy], [correlation], [mse],
+            [avg_ale_entropy_norm], [avg_epi_entropy_norm], [avg_tot_entropy_norm], [correlation], [mse],
             function_name, noise_type=noise_type,
             func_type=func_type, model_name=model_name, region_name=region_name,
             date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
@@ -679,9 +735,9 @@ def compute_and_save_statistics_entropy_undersampling(
         plt.close(fig)
         
         results[region_name.lower()] = {
-            'avg_ale_entropy': avg_ale_entropy,
-            'avg_epi_entropy': avg_epi_entropy,
-            'avg_tot_entropy': avg_tot_entropy,
+            'avg_ale_norm': avg_ale_entropy_norm,
+            'avg_epi_norm': avg_epi_entropy_norm,
+            'avg_tot_norm': avg_tot_entropy_norm,
             'correlation': correlation,
             'mse': mse,
             'density_factor': density_factor,
@@ -705,16 +761,27 @@ def compute_and_save_statistics_entropy_undersampling(
         well_sampled_tot = np.concatenate([uncertainties_entropy_by_region[i]['tot'] for i in well_sampled_regions])
         well_sampled_mse = np.mean([mse_by_region[i] for i in well_sampled_regions])
         
-        avg_undersampled_ale = np.mean(undersampled_ale)
-        avg_undersampled_epi = np.mean(undersampled_epi)
-        avg_undersampled_tot = np.mean(undersampled_tot)
+        # Normalize (ale and epi separately)
+        undersampled_ale_norm = normalize(undersampled_ale, ale_min, ale_max)
+        undersampled_epi_norm = normalize(undersampled_epi, epi_min, epi_max)
+        # Total is sum of normalized ale and epi (not normalized separately)
+        undersampled_tot_norm = undersampled_ale_norm + undersampled_epi_norm
+        
+        well_sampled_ale_norm = normalize(well_sampled_ale, ale_min, ale_max)
+        well_sampled_epi_norm = normalize(well_sampled_epi, epi_min, epi_max)
+        # Total is sum of normalized ale and epi (not normalized separately)
+        well_sampled_tot_norm = well_sampled_ale_norm + well_sampled_epi_norm
+        
+        avg_undersampled_ale = np.mean(undersampled_ale_norm)
+        avg_undersampled_epi = np.mean(undersampled_epi_norm)
+        avg_undersampled_tot = np.mean(undersampled_tot_norm)
         corr_undersampled = np.corrcoef(undersampled_epi, undersampled_ale)[0, 1]
         if np.isnan(corr_undersampled):
             corr_undersampled = 0.0
         
-        avg_well_sampled_ale = np.mean(well_sampled_ale)
-        avg_well_sampled_epi = np.mean(well_sampled_epi)
-        avg_well_sampled_tot = np.mean(well_sampled_tot)
+        avg_well_sampled_ale = np.mean(well_sampled_ale_norm)
+        avg_well_sampled_epi = np.mean(well_sampled_epi_norm)
+        avg_well_sampled_tot = np.mean(well_sampled_tot_norm)
         corr_well_sampled = np.corrcoef(well_sampled_epi, well_sampled_ale)[0, 1]
         if np.isnan(corr_well_sampled):
             corr_well_sampled = 0.0
@@ -722,7 +789,7 @@ def compute_and_save_statistics_entropy_undersampling(
         print(f"\n{'='*60}")
         print("Comparison: Undersampled vs Well-sampled Regions (Entropy)")
         print(f"{'='*60}")
-        print(f"{'Region':<20} {'Avg Ale Entropy':<20} {'Avg Epi Entropy':<20} {'Avg Tot Entropy':<20} {'Correlation':<15} {'MSE':<15}")
+        print(f"{'Region':<20} {'Avg Ale (norm)':<20} {'Avg Epi (norm)':<20} {'Avg Tot (norm)':<20} {'Correlation':<15} {'MSE':<15}")
         print("-" * 140)
         print(f"{'Undersampled':<20} {avg_undersampled_ale:>19.6f}  {avg_undersampled_epi:>19.6f}  {avg_undersampled_tot:>19.6f}  {corr_undersampled:>14.6f}  {undersampled_mse:>14.6f}")
         print(f"{'Well-sampled':<20} {avg_well_sampled_ale:>19.6f}  {avg_well_sampled_epi:>19.6f}  {avg_well_sampled_tot:>19.6f}  {corr_well_sampled:>14.6f}  {well_sampled_mse:>14.6f}")
@@ -745,9 +812,15 @@ def compute_and_save_statistics_entropy_undersampling(
     all_tot_combined = np.concatenate([unc['tot'] for unc in uncertainties_entropy_by_region])
     overall_mse = np.mean(mse_by_region)
     
-    avg_ale_overall = np.mean(all_ale_combined)
-    avg_epi_overall = np.mean(all_epi_combined)
-    avg_tot_overall = np.mean(all_tot_combined)
+    # Normalize overall (ale and epi separately)
+    ale_norm_overall = normalize(all_ale_combined, ale_min, ale_max)
+    epi_norm_overall = normalize(all_epi_combined, epi_min, epi_max)
+    # Total is sum of normalized ale and epi (not normalized separately)
+    tot_norm_overall = ale_norm_overall + epi_norm_overall
+    
+    avg_ale_overall = np.mean(ale_norm_overall)
+    avg_epi_overall = np.mean(epi_norm_overall)
+    avg_tot_overall = np.mean(tot_norm_overall)
     corr_overall = np.corrcoef(all_epi_combined, all_ale_combined)[0, 1]
     if np.isnan(corr_overall):
         corr_overall = 0.0
@@ -755,7 +828,7 @@ def compute_and_save_statistics_entropy_undersampling(
     print(f"\n{'='*60}")
     print("Overall Statistics (All Regions Combined) - Entropy")
     print(f"{'='*60}")
-    print(f"{'Region':<15} {'Avg Ale Entropy':<20} {'Avg Epi Entropy':<20} {'Avg Tot Entropy':<20} {'Correlation':<15} {'MSE':<15}")
+    print(f"{'Region':<15} {'Avg Ale (norm)':<20} {'Avg Epi (norm)':<20} {'Avg Tot (norm)':<20} {'Correlation':<15} {'MSE':<15}")
     print("-" * 140)
     print(f"{'Overall':<15} {avg_ale_overall:>19.6f}  {avg_epi_overall:>19.6f}  {avg_tot_overall:>19.6f}  {corr_overall:>14.6f}  {overall_mse:>14.6f}")
     
@@ -770,13 +843,18 @@ def compute_and_save_statistics_entropy_undersampling(
     plt.close(fig)
     
     results['overall'] = {
-        'avg_ale_entropy': avg_ale_overall,
-        'avg_epi_entropy': avg_epi_overall,
-        'avg_tot_entropy': avg_tot_overall,
+        'avg_ale_norm': avg_ale_overall,
+        'avg_epi_norm': avg_epi_overall,
+        'avg_tot_norm': avg_tot_overall,
         'correlation': corr_overall,
         'mse': overall_mse,
         'stats_df': stats_df
     }
+    
+    print(f"\n{'='*60}")
+    print("Note: Average entropy values are normalized to [0, 1] range across all regions")
+    print("      Correlation is computed on original (non-normalized) entropy values")
+    print(f"{'='*60}")
     
     return results
 
@@ -794,7 +872,7 @@ def run_mc_dropout_undersampling_experiment(
     seed: int = 42,
     p: float = 0.2,
     beta: float = 0.5,
-    epochs: int = 700,
+    epochs: int = 250,
     lr: float = 1e-3,
     batch_size: int = 32,
     mc_samples: int = 20,
@@ -927,6 +1005,36 @@ def run_mc_dropout_undersampling_experiment(
                 mse = 0.0
             mse_by_region.append(mse)
         
+        # Compute predictive aggregation (μ*, σ*²)
+        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        
+        # Compute true noise variance for grid points
+        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+        
+        # Compute NLL, CRPS, and disentanglement metrics for each region
+        nll_by_region = []
+        crps_by_region = []
+        spearman_aleatoric_by_region = []
+        spearman_epistemic_by_region = []
+        
+        for mask in region_masks:
+            if np.any(mask):
+                nll = compute_gaussian_nll(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                crps = compute_crps_gaussian(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                disentangle = compute_uncertainty_disentanglement(
+                    y_grid_clean_flat[mask], mu_star[mask],
+                    ale_var[mask], epi_var[mask], true_noise_var[mask]
+                )
+                nll_by_region.append(nll)
+                crps_by_region.append(crps)
+                spearman_aleatoric_by_region.append(disentangle['spearman_aleatoric'])
+                spearman_epistemic_by_region.append(disentangle['spearman_epistemic'])
+            else:
+                nll_by_region.append(0.0)
+                crps_by_region.append(0.0)
+                spearman_aleatoric_by_region.append(0.0)
+                spearman_epistemic_by_region.append(0.0)
+        
         # Save raw model outputs
         save_model_outputs(
             mu_samples=mu_samples,
@@ -967,7 +1075,10 @@ def run_mc_dropout_undersampling_experiment(
         compute_and_save_statistics_undersampling(
             uncertainties_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
-            date=date, dropout_p=p, mc_samples=mc_samples
+            date=date, dropout_p=p, mc_samples=mc_samples,
+            nll_by_region=nll_by_region, crps_by_region=crps_by_region,
+            spearman_aleatoric_by_region=spearman_aleatoric_by_region,
+            spearman_epistemic_by_region=spearman_epistemic_by_region
         )
         
         # Compute and save entropy-based statistics
@@ -990,6 +1101,7 @@ def run_deep_ensemble_undersampling_experiment(
     beta: float = 0.5,
     batch_size: int = 32,
     K: int = 5,
+    epochs: int = 250,
     parallel: bool = True,
     entropy_method: str = 'analytical'
 ):
@@ -1074,7 +1186,7 @@ def run_deep_ensemble_undersampling_experiment(
         ensemble = train_ensemble_deep(
             x_train_norm, y_train,
             batch_size=batch_size, K=K,
-            loss_type='beta_nll', beta=beta, parallel=True
+            loss_type='beta_nll', beta=beta, parallel=True, epochs=epochs
         )
         
         # Make predictions with raw arrays
@@ -1158,7 +1270,10 @@ def run_deep_ensemble_undersampling_experiment(
         compute_and_save_statistics_undersampling(
             uncertainties_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
-            date=date, n_nets=K
+            date=date, n_nets=K,
+            nll_by_region=nll_by_region, crps_by_region=crps_by_region,
+            spearman_aleatoric_by_region=spearman_aleatoric_by_region,
+            spearman_epistemic_by_region=spearman_epistemic_by_region
         )
         
         # Compute and save entropy-based statistics
@@ -1291,10 +1406,20 @@ def run_bnn_undersampling_experiment(
         epi_entropy = entropy_results['epistemic']
         tot_entropy = entropy_results['total']
         
+        # Compute predictive aggregation (μ*, σ*²)
+        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        
+        # Compute true noise variance for grid points
+        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+        
         # Split uncertainties by region
         uncertainties_by_region = []
         uncertainties_entropy_by_region = []
         mse_by_region = []
+        nll_by_region = []
+        crps_by_region = []
+        spearman_aleatoric_by_region = []
+        spearman_epistemic_by_region = []
         
         mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
         y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -1314,9 +1439,27 @@ def run_bnn_undersampling_experiment(
             
             if np.any(mask):
                 mse = np.mean((mu_pred_flat[mask] - y_grid_clean_flat[mask])**2)
+                
+                # Compute NLL, CRPS, and disentanglement metrics for this region
+                nll = compute_gaussian_nll(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                crps = compute_crps_gaussian(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                disentangle = compute_uncertainty_disentanglement(
+                    y_grid_clean_flat[mask], mu_star[mask],
+                    ale_var[mask] if ale_var.ndim == 1 else ale_var[mask].flatten(),
+                    epi_var[mask] if epi_var.ndim == 1 else epi_var[mask].flatten(),
+                    true_noise_var[mask]
+                )
             else:
                 mse = 0.0
+                nll = 0.0
+                crps = 0.0
+                disentangle = {'spearman_aleatoric': 0.0, 'spearman_epistemic': 0.0}
+            
             mse_by_region.append(mse)
+            nll_by_region.append(nll)
+            crps_by_region.append(crps)
+            spearman_aleatoric_by_region.append(disentangle['spearman_aleatoric'])
+            spearman_epistemic_by_region.append(disentangle['spearman_epistemic'])
         
         # Save raw model outputs
         save_model_outputs(
@@ -1356,7 +1499,10 @@ def run_bnn_undersampling_experiment(
         compute_and_save_statistics_undersampling(
             uncertainties_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'BNN',
-            date=date
+            date=date,
+            nll_by_region=nll_by_region, crps_by_region=crps_by_region,
+            spearman_aleatoric_by_region=spearman_aleatoric_by_region,
+            spearman_epistemic_by_region=spearman_epistemic_by_region
         )
         
         # Compute and save entropy-based statistics
@@ -1471,10 +1617,20 @@ def run_bamlss_undersampling_experiment(
         epi_entropy = entropy_results['epistemic']
         tot_entropy = entropy_results['total']
         
+        # Compute predictive aggregation (μ*, σ*²)
+        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        
+        # Compute true noise variance for grid points
+        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+        
         # Split uncertainties by region
         uncertainties_by_region = []
         uncertainties_entropy_by_region = []
         mse_by_region = []
+        nll_by_region = []
+        crps_by_region = []
+        spearman_aleatoric_by_region = []
+        spearman_epistemic_by_region = []
         
         mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
         y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -1494,9 +1650,27 @@ def run_bamlss_undersampling_experiment(
             
             if np.any(mask):
                 mse = np.mean((mu_pred_flat[mask] - y_grid_clean_flat[mask])**2)
+                
+                # Compute NLL, CRPS, and disentanglement metrics for this region
+                nll = compute_gaussian_nll(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                crps = compute_crps_gaussian(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                disentangle = compute_uncertainty_disentanglement(
+                    y_grid_clean_flat[mask], mu_star[mask],
+                    ale_var[mask] if ale_var.ndim == 1 else ale_var[mask].flatten(),
+                    epi_var[mask] if epi_var.ndim == 1 else epi_var[mask].flatten(),
+                    true_noise_var[mask]
+                )
             else:
                 mse = 0.0
+                nll = 0.0
+                crps = 0.0
+                disentangle = {'spearman_aleatoric': 0.0, 'spearman_epistemic': 0.0}
+            
             mse_by_region.append(mse)
+            nll_by_region.append(nll)
+            crps_by_region.append(crps)
+            spearman_aleatoric_by_region.append(disentangle['spearman_aleatoric'])
+            spearman_epistemic_by_region.append(disentangle['spearman_epistemic'])
         
         # Save raw model outputs
         save_model_outputs(
@@ -1536,7 +1710,10 @@ def run_bamlss_undersampling_experiment(
         compute_and_save_statistics_undersampling(
             uncertainties_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
-            date=date
+            date=date,
+            nll_by_region=nll_by_region, crps_by_region=crps_by_region,
+            spearman_aleatoric_by_region=spearman_aleatoric_by_region,
+            spearman_epistemic_by_region=spearman_epistemic_by_region
         )
         
         # Compute and save entropy-based statistics

@@ -21,6 +21,13 @@ from datetime import datetime
 from utils.results_save import save_summary_statistics_noise_level, save_model_outputs
 from utils.plotting import plot_uncertainties_no_ood
 from utils.device import get_device_for_worker, get_num_gpus
+from utils.metrics import (
+    compute_predictive_aggregation,
+    compute_gaussian_nll,
+    compute_crps_gaussian,
+    compute_true_noise_variance,
+    compute_uncertainty_disentanglement
+)
 
 # Set multiprocessing start method for CUDA support (Linux: can use 'fork' or 'spawn')
 # Using 'spawn' for better CUDA compatibility
@@ -84,7 +91,7 @@ def _train_single_tau_mc_dropout(args):
 def _train_single_tau_deep_ensemble(args):
     """Wrapper function for training Deep Ensemble at a single tau value (for parallel execution)."""
     (worker_id, tau, distribution, x_train, y_train, x_grid, y_grid_clean,
-     seed, beta, batch_size, K, func_type, noise_type) = args
+     seed, beta, batch_size, K, epochs, func_type, noise_type) = args
     
     # Set device for this worker
     device = get_device_for_worker(worker_id)
@@ -113,7 +120,7 @@ def _train_single_tau_deep_ensemble(args):
     ensemble = train_ensemble_deep(
         x_train_norm, y_train,
         batch_size=batch_size, K=K,
-        loss_type='beta_nll', beta=beta, parallel=True
+        loss_type='beta_nll', beta=beta, parallel=True, epochs=epochs
     )
     
     # Make predictions with raw arrays
@@ -211,7 +218,11 @@ def compute_and_save_statistics_noise_level(
     date: str = None,
     dropout_p: float = None,
     mc_samples: int = None,
-    n_nets: int = None
+    n_nets: int = None,
+    nll_by_tau: dict = None,
+    crps_by_tau: dict = None,
+    spearman_aleatoric_by_tau: dict = None,
+    spearman_epistemic_by_tau: dict = None
 ):
     """
     Shared function to compute normalized statistics and save results for noise level experiments.
@@ -279,8 +290,9 @@ def compute_and_save_statistics_noise_level(
     print(f"\n{'='*60}")
     print(f"Normalized Average Uncertainties by Tau - {function_name} Function - {model_name} - {distribution}")
     print(f"{'='*60}")
-    print(f"\n{'Tau':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15}")
-    print("-" * 140)
+    header = f"\n{'Tau':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15} {'NLL':<15} {'CRPS':<15} {'Spear_Ale':<15} {'Spear_Epi':<15}"
+    print(header)
+    print("-" * len(header))
     
     for tau in tau_values:
         ale_vals = np.concatenate(uncertainties_by_tau[tau]['ale'])
@@ -301,18 +313,64 @@ def compute_and_save_statistics_noise_level(
         if np.isnan(correlation):
             correlation = 0.0
         
+        # Get metrics for this tau
+        avg_nll = np.mean(nll_by_tau[tau]) if nll_by_tau is not None and tau in nll_by_tau else None
+        avg_crps = np.mean(crps_by_tau[tau]) if crps_by_tau is not None and tau in crps_by_tau else None
+        avg_spear_ale = np.mean(spearman_aleatoric_by_tau[tau]) if spearman_aleatoric_by_tau is not None and tau in spearman_aleatoric_by_tau else None
+        avg_spear_epi = np.mean(spearman_epistemic_by_tau[tau]) if spearman_epistemic_by_tau is not None and tau in spearman_epistemic_by_tau else None
+        
         avg_ale_norm_list.append(avg_ale_norm)
         avg_epi_norm_list.append(avg_epi_norm)
         avg_tot_norm_list.append(avg_tot_norm)
         correlation_list.append(correlation)
         mse_list.append(avg_mse)
         
-        print(f"{tau:>12.2f}  {avg_ale_norm:>24.6f}  {avg_epi_norm:>24.6f}  {avg_tot_norm:>24.6f}  {correlation:>24.6f}  {avg_mse:>15.6f}")
+        # Print statistics
+        nll_str = f"{avg_nll:>15.6f}" if avg_nll is not None else f"{'N/A':>15}"
+        crps_str = f"{avg_crps:>15.6f}" if avg_crps is not None else f"{'N/A':>15}"
+        spear_ale_str = f"{avg_spear_ale:>15.6f}" if avg_spear_ale is not None else f"{'N/A':>15}"
+        spear_epi_str = f"{avg_spear_epi:>15.6f}" if avg_spear_epi is not None else f"{'N/A':>15}"
+        print_line = f"{tau:>12.2f}  {avg_ale_norm:>24.6f}  {avg_epi_norm:>24.6f}  {avg_tot_norm:>24.6f}  {correlation:>24.6f}  {avg_mse:>15.6f} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
+        print(print_line)
     
     print(f"\n{'='*60}")
     print("Note: Average values are normalized to [0, 1] range across all tau values")
     print("      Correlation is computed on original (non-normalized) uncertainty values")
     print(f"{'='*60}")
+    
+    # Prepare metrics lists
+    nll_list = []
+    crps_list = []
+    spearman_aleatoric_list = []
+    spearman_epistemic_list = []
+    
+    if nll_by_tau is not None:
+        for tau in tau_values:
+            if tau in nll_by_tau:
+                nll_list.append(np.mean(nll_by_tau[tau]))
+            else:
+                nll_list.append(None)
+    
+    if crps_by_tau is not None:
+        for tau in tau_values:
+            if tau in crps_by_tau:
+                crps_list.append(np.mean(crps_by_tau[tau]))
+            else:
+                crps_list.append(None)
+    
+    if spearman_aleatoric_by_tau is not None:
+        for tau in tau_values:
+            if tau in spearman_aleatoric_by_tau:
+                spearman_aleatoric_list.append(np.mean(spearman_aleatoric_by_tau[tau]))
+            else:
+                spearman_aleatoric_list.append(None)
+    
+    if spearman_epistemic_by_tau is not None:
+        for tau in tau_values:
+            if tau in spearman_epistemic_by_tau:
+                spearman_epistemic_list.append(np.mean(spearman_epistemic_by_tau[tau]))
+            else:
+                spearman_epistemic_list.append(None)
     
     # Save summary statistics
     stats_df, fig = save_summary_statistics_noise_level(
@@ -320,7 +378,11 @@ def compute_and_save_statistics_noise_level(
         avg_tot_norm_list, correlation_list, mse_list,
         function_name, distribution=distribution,
         noise_type=noise_type, func_type=func_type, model_name=model_name,
-        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
+        nll_list=nll_list if nll_list else None,
+        crps_list=crps_list if crps_list else None,
+        spearman_aleatoric_list=spearman_aleatoric_list if spearman_aleatoric_list else None,
+        spearman_epistemic_list=spearman_epistemic_list if spearman_epistemic_list else None
     )
     plt.show()
     plt.close(fig)
@@ -330,6 +392,149 @@ def compute_and_save_statistics_noise_level(
         'avg_ale_norm': avg_ale_norm_list,
         'avg_epi_norm': avg_epi_norm_list,
         'avg_tot_norm': avg_tot_norm_list,
+        'correlations': correlation_list,
+        'mse': mse_list,
+        'stats_df': stats_df
+    }
+
+
+def compute_and_save_statistics_entropy_noise_level(
+    uncertainties_by_tau: dict,
+    mse_by_tau: dict,
+    tau_values: list,
+    function_name: str,
+    distribution: str,
+    noise_type: str,
+    func_type: str,
+    model_name: str,
+    date: str = None,
+    dropout_p: float = None,
+    mc_samples: int = None,
+    n_nets: int = None
+):
+    """
+    Shared function to compute normalized entropy-based statistics and save results for noise level experiments.
+    
+    This function normalizes entropy values across all tau values, computes
+    averages and correlations, prints formatted statistics, and saves results.
+    
+    Parameters:
+    -----------
+    uncertainties_by_tau : dict
+        Dictionary mapping tau to dict with 'ale', 'epi', 'tot' entropy lists
+    mse_by_tau : dict
+        Dictionary mapping tau to list of MSE values
+    tau_values : list
+        List of tau values tested
+    function_name : str
+        Human-readable function name (e.g., "Linear", "Sinusoidal")
+    distribution : str
+        Noise distribution ('normal' or 'laplace')
+    noise_type : str
+        'homoscedastic' or 'heteroscedastic'
+    func_type : str
+        Function type identifier (e.g., 'linear', 'sin')
+    model_name : str
+        Model name for saving results (e.g., 'MC_Dropout', 'Deep_Ensemble')
+    date : str, optional
+        Date string in YYYYMMDD format
+    dropout_p : float, optional
+        Dropout probability for MC Dropout
+    mc_samples : int, optional
+        Number of MC samples for MC Dropout
+    n_nets : int, optional
+        Number of nets for Deep Ensemble
+    
+    Returns:
+    --------
+    dict : Statistics dictionary with tau values, averages, correlations, MSE, and stats_df
+    """
+    from utils.results_save import save_summary_statistics_entropy_noise_level
+    
+    def normalize(values, vmin, vmax):
+        """Normalize values to [0, 1] range"""
+        if vmax - vmin == 0:
+            return np.zeros_like(values)
+        return (values - vmin) / (vmax - vmin)
+    
+    # Collect all entropy values for normalization (across all tau values)
+    all_ale = np.concatenate([np.concatenate(uncertainties_by_tau[tau]['ale']) 
+                              for tau in tau_values])
+    all_epi = np.concatenate([np.concatenate(uncertainties_by_tau[tau]['epi']) 
+                              for tau in tau_values])
+    all_tot = np.concatenate([np.concatenate(uncertainties_by_tau[tau]['tot']) 
+                              for tau in tau_values])
+    
+    # Compute min/max for normalization
+    ale_min, ale_max = all_ale.min(), all_ale.max()
+    epi_min, epi_max = all_epi.min(), all_epi.max()
+    tot_min, tot_max = all_tot.min(), all_tot.max()
+    
+    # Compute statistics for each tau value
+    avg_ale_entropy_list = []
+    avg_epi_entropy_list = []
+    avg_tot_entropy_list = []
+    correlation_list = []
+    mse_list = []
+    
+    print(f"\n{'='*60}")
+    print(f"Normalized Average Entropies by Tau - {function_name} Function - {model_name} - {distribution}")
+    print(f"{'='*60}")
+    print(f"\n{'Tau':<12} {'Avg Aleatoric (norm)':<25} {'Avg Epistemic (norm)':<25} {'Avg Total (norm)':<25} {'Correlation (Epi-Ale)':<25} {'MSE':<15}")
+    print("-" * 140)
+    
+    for tau in tau_values:
+        ale_vals = np.concatenate(uncertainties_by_tau[tau]['ale'])
+        epi_vals = np.concatenate(uncertainties_by_tau[tau]['epi'])
+        tot_vals = np.concatenate(uncertainties_by_tau[tau]['tot'])
+        mse_vals = mse_by_tau[tau]
+        
+        # Normalize entropy values (ale and epi separately)
+        ale_norm = normalize(ale_vals, ale_min, ale_max)
+        epi_norm = normalize(epi_vals, epi_min, epi_max)
+        # Total is sum of normalized ale and epi (not normalized separately)
+        tot_norm = ale_norm + epi_norm
+        
+        # Compute normalized averages
+        avg_ale_entropy = np.mean(ale_norm)
+        avg_epi_entropy = np.mean(epi_norm)
+        avg_tot_entropy = np.mean(tot_norm)
+        avg_mse = np.mean(mse_vals)
+        
+        # Correlation computed on original (non-normalized) values
+        correlation = np.corrcoef(epi_vals, ale_vals)[0, 1]
+        if np.isnan(correlation):
+            correlation = 0.0
+        
+        avg_ale_entropy_list.append(avg_ale_entropy)
+        avg_epi_entropy_list.append(avg_epi_entropy)
+        avg_tot_entropy_list.append(avg_tot_entropy)
+        correlation_list.append(correlation)
+        mse_list.append(avg_mse)
+        
+        print(f"{tau:>12.2f}  {avg_ale_entropy:>24.6f}  {avg_epi_entropy:>24.6f}  {avg_tot_entropy:>24.6f}  {correlation:>24.6f}  {avg_mse:>15.6f}")
+    
+    print(f"\n{'='*60}")
+    print("Note: Average entropy values are normalized to [0, 1] range across all tau values")
+    print("      Correlation is computed on original (non-normalized) entropy values")
+    print(f"{'='*60}")
+    
+    # Save summary statistics
+    stats_df, fig = save_summary_statistics_entropy_noise_level(
+        tau_values, avg_ale_entropy_list, avg_epi_entropy_list,
+        avg_tot_entropy_list, correlation_list, mse_list,
+        function_name, distribution=distribution,
+        noise_type=noise_type, func_type=func_type, model_name=model_name,
+        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+    )
+    plt.show()
+    plt.close(fig)
+    
+    return {
+        'tau_values': tau_values,
+        'avg_ale_norm': avg_ale_entropy_list,
+        'avg_epi_norm': avg_epi_entropy_list,
+        'avg_tot_norm': avg_tot_entropy_list,
         'correlations': correlation_list,
         'mse': mse_list,
         'stats_df': stats_df
@@ -348,7 +553,7 @@ def run_mc_dropout_noise_level_experiment(
     seed: int = 42,
     p: float = 0.2,
     beta: float = 0.5,
-    epochs: int = 700,
+    epochs: int = 250,
     lr: float = 1e-3,
     batch_size: int = 32,
     mc_samples: int = 20,
@@ -415,6 +620,10 @@ def run_mc_dropout_noise_level_experiment(
             
             uncertainties_by_tau = {tau: {'ale': [], 'epi': [], 'tot': []} for tau in tau_values}
             mse_by_tau = {tau: [] for tau in tau_values}
+            nll_by_tau = {tau: [] for tau in tau_values}
+            crps_by_tau = {tau: [] for tau in tau_values}
+            spearman_aleatoric_by_tau = {tau: [] for tau in tau_values}
+            spearman_epistemic_by_tau = {tau: [] for tau in tau_values}
             
             # Prepare arguments for parallel execution
             num_gpus = get_num_gpus()
@@ -458,6 +667,26 @@ def run_mc_dropout_noise_level_experiment(
                         uncertainties_by_tau[tau]['epi'].append(epi_var)
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
+                        
+                        # Compute predictive aggregation (μ*, σ*²)
+                        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                        
+                        # Compute true noise variance for grid points (use tau from current iteration)
+                        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
+                        
+                        # Compute NLL, CRPS, and disentanglement metrics
+                        mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
+                        y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
+                        nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                        crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                        disentangle = compute_uncertainty_disentanglement(
+                            y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                        )
+                        
+                        nll_by_tau[tau].append(nll)
+                        crps_by_tau[tau].append(crps)
+                        spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
+                        spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
                         
                         # Save raw model outputs
                         save_model_outputs(
@@ -532,6 +761,24 @@ def run_mc_dropout_noise_level_experiment(
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
                     
+                    # Compute predictive aggregation (μ*, σ*²)
+                    mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                    
+                    # Compute true noise variance for grid points (use tau from current iteration)
+                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
+                    
+                    # Compute NLL, CRPS, and disentanglement metrics
+                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                    disentangle = compute_uncertainty_disentanglement(
+                        y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                    )
+                    
+                    nll_by_tau[tau].append(nll)
+                    crps_by_tau[tau].append(crps)
+                    spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
+                    spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                    
                     # Save raw model outputs
                     save_model_outputs(
                         mu_samples=mu_samples,
@@ -564,7 +811,10 @@ def run_mc_dropout_noise_level_experiment(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'MC_Dropout',
-                date=date, dropout_p=p, mc_samples=mc_samples
+                date=date, dropout_p=p, mc_samples=mc_samples,
+                nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
+                spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
+                spearman_epistemic_by_tau=spearman_epistemic_by_tau
             )
 
 
@@ -581,6 +831,7 @@ def run_deep_ensemble_noise_level_experiment(
     beta: float = 0.5,
     batch_size: int = 32,
     K: int = 5,
+    epochs: int = 250,
     parallel: bool = True
 ):
     """
@@ -657,7 +908,7 @@ def run_deep_ensemble_noise_level_experiment(
                         noise_type=noise_type, type=func_type, tau=tau, distribution=distribution
                     )
                     args = (idx, tau, distribution, x_train, y_train, x_grid, y_grid_clean,
-                           seed, beta, batch_size, K, func_type, noise_type)
+                           seed, beta, batch_size, K, epochs, func_type, noise_type)
                     args_list.append(args)
                 
                 try:
@@ -674,6 +925,26 @@ def run_deep_ensemble_noise_level_experiment(
                         uncertainties_by_tau[tau]['epi'].append(epi_var)
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
+                        
+                        # Compute predictive aggregation (μ*, σ*²)
+                        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                        
+                        # Compute true noise variance for grid points (use tau from current iteration)
+                        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
+                        
+                        # Compute NLL, CRPS, and disentanglement metrics
+                        mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
+                        y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
+                        nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                        crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                        disentangle = compute_uncertainty_disentanglement(
+                            y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                        )
+                        
+                        nll_by_tau[tau].append(nll)
+                        crps_by_tau[tau].append(crps)
+                        spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
+                        spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
                         
                         # Save raw model outputs
                         save_model_outputs(
@@ -724,7 +995,7 @@ def run_deep_ensemble_noise_level_experiment(
                     ensemble = train_ensemble_deep(
                         x_train_norm, y_train,
                         batch_size=batch_size, K=K,
-                        loss_type='beta_nll', beta=beta, parallel=True
+                        loss_type='beta_nll', beta=beta, parallel=True, epochs=epochs
                     )
                     
                     # Make predictions with raw arrays
@@ -739,6 +1010,24 @@ def run_deep_ensemble_noise_level_experiment(
                     uncertainties_by_tau[tau]['epi'].append(epi_var)
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
+                    
+                    # Compute predictive aggregation (μ*, σ*²)
+                    mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                    
+                    # Compute true noise variance for grid points (use tau from current iteration)
+                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
+                    
+                    # Compute NLL, CRPS, and disentanglement metrics
+                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                    disentangle = compute_uncertainty_disentanglement(
+                        y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                    )
+                    
+                    nll_by_tau[tau].append(nll)
+                    crps_by_tau[tau].append(crps)
+                    spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
+                    spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
                     
                     # Save raw model outputs
                     save_model_outputs(
@@ -770,7 +1059,10 @@ def run_deep_ensemble_noise_level_experiment(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'Deep_Ensemble',
-                date=date, n_nets=K
+                date=date, n_nets=K,
+                nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
+                spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
+                spearman_epistemic_by_tau=spearman_epistemic_by_tau
             )
 
 
@@ -885,6 +1177,26 @@ def run_bnn_noise_level_experiment(
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
                         
+                        # Compute predictive aggregation (μ*, σ*²)
+                        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                        
+                        # Compute true noise variance for grid points (use tau from current iteration)
+                        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
+                        
+                        # Compute NLL, CRPS, and disentanglement metrics
+                        mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
+                        y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
+                        nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                        crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                        disentangle = compute_uncertainty_disentanglement(
+                            y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                        )
+                        
+                        nll_by_tau[tau].append(nll)
+                        crps_by_tau[tau].append(crps)
+                        spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
+                        spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                        
                         # Save raw model outputs
                         save_model_outputs(
                             mu_samples=mu_samples,
@@ -982,7 +1294,10 @@ def run_bnn_noise_level_experiment(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'BNN',
-                date=date
+                date=date,
+                nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
+                spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
+                spearman_epistemic_by_tau=spearman_epistemic_by_tau
             )
 
 
@@ -1053,6 +1368,10 @@ def run_bamlss_noise_level_experiment(
             
             uncertainties_by_tau = {tau: {'ale': [], 'epi': [], 'tot': []} for tau in tau_values}
             mse_by_tau = {tau: [] for tau in tau_values}
+            nll_by_tau = {tau: [] for tau in tau_values}
+            crps_by_tau = {tau: [] for tau in tau_values}
+            spearman_aleatoric_by_tau = {tau: [] for tau in tau_values}
+            spearman_epistemic_by_tau = {tau: [] for tau in tau_values}
             
             # BAMLSS uses R, so CPU-only parallelization
             total_tasks = len(tau_values)
@@ -1083,6 +1402,26 @@ def run_bamlss_noise_level_experiment(
                         uncertainties_by_tau[tau]['epi'].append(epi_var)
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
+                        
+                        # Compute predictive aggregation (μ*, σ*²)
+                        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                        
+                        # Compute true noise variance for grid points (use tau from current iteration)
+                        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
+                        
+                        # Compute NLL, CRPS, and disentanglement metrics
+                        mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
+                        y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
+                        nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                        crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                        disentangle = compute_uncertainty_disentanglement(
+                            y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                        )
+                        
+                        nll_by_tau[tau].append(nll)
+                        crps_by_tau[tau].append(crps)
+                        spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
+                        spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
                         
                         # Save raw model outputs
                         save_model_outputs(
@@ -1142,6 +1481,24 @@ def run_bamlss_noise_level_experiment(
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
                     
+                    # Compute predictive aggregation (μ*, σ*²)
+                    mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                    
+                    # Compute true noise variance for grid points (use tau from current iteration)
+                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
+                    
+                    # Compute NLL, CRPS, and disentanglement metrics
+                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                    disentangle = compute_uncertainty_disentanglement(
+                        y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                    )
+                    
+                    nll_by_tau[tau].append(nll)
+                    crps_by_tau[tau].append(crps)
+                    spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
+                    spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                    
                     # Save raw model outputs
                     save_model_outputs(
                         mu_samples=mu_samples,
@@ -1171,6 +1528,9 @@ def run_bamlss_noise_level_experiment(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'BAMLSS',
-                date=date
+                date=date,
+                nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
+                spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
+                spearman_epistemic_by_tau=spearman_epistemic_by_tau
             )
 
