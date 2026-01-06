@@ -105,6 +105,104 @@ def save_statistics(data_dict, filename, subfolder='', save_excel=True):
     
     return csv_filepath
 
+def save_combined_statistics_excel(variance_df, entropy_df, function_name, noise_type='heteroscedastic',
+                                   func_type='', model_name='', subfolder='', date=None,
+                                   dropout_p=None, mc_samples=None, n_nets=None, distribution=None):
+    """Save both variance and entropy statistics to a single Excel file with separate sheets.
+    
+    Args:
+        variance_df: DataFrame with variance-based statistics
+        entropy_df: DataFrame with entropy-based statistics
+        function_name: Name of the function (e.g., 'Linear', 'Sinusoidal')
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        func_type: Function type identifier (e.g., 'linear', 'sin')
+        model_name: Optional model name for filename
+        subfolder: Subfolder path for saving
+        date: Optional date string in YYYYMMDD format
+        dropout_p: Optional dropout probability for MC Dropout
+        mc_samples: Optional number of MC samples for MC Dropout
+        n_nets: Optional number of nets for Deep Ensemble
+        distribution: Optional distribution name (for noise level experiments)
+    
+    Returns:
+        str: Path to saved Excel file
+    """
+    global stats_dir
+    if stats_dir is None:
+        _, stats_dir = _get_default_dirs()
+    
+    if subfolder:
+        save_dir = stats_dir / subfolder
+        save_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        save_dir = stats_dir
+        save_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Build base filename (same pattern as individual save functions)
+    if distribution:
+        base_filename = f"uncertainties_summary_{function_name}_{noise_type}_{distribution}_combined"
+    else:
+        base_filename = f"uncertainties_summary_{function_name}_{noise_type}_combined"
+    
+    # Build parameter strings
+    param_parts = []
+    if model_name:
+        if model_name == 'MC_Dropout':
+            if dropout_p is not None:
+                param_parts.append(f"p{dropout_p}")
+            if mc_samples is not None:
+                param_parts.append(f"M{mc_samples}")
+        elif model_name == 'Deep_Ensemble':
+            if n_nets is not None:
+                param_parts.append(f"K{n_nets}")
+        
+        if param_parts:
+            model_prefix = f"{model_name}_{'_'.join(param_parts)}"
+        else:
+            model_prefix = model_name
+        
+        final_filename = f"{model_prefix}_{base_filename}"
+    else:
+        final_filename = base_filename
+    
+    # Add date prefix if provided
+    if date:
+        final_filename = f"{date}_{final_filename}"
+    
+    # Validate DataFrames
+    if variance_df is None:
+        print("Warning: variance_df is None. Skipping combined Excel save.")
+        return None
+    if entropy_df is None:
+        print("Warning: entropy_df is None. Skipping combined Excel save.")
+        return None
+    
+    if len(variance_df) == 0:
+        print("Warning: variance_df is empty. Combined Excel file may have incomplete data.")
+    if len(entropy_df) == 0:
+        print("Warning: entropy_df is empty. Combined Excel file may have incomplete data.")
+    
+    # Save to Excel with two sheets
+    excel_filepath = save_dir / f"{sanitize_filename(final_filename)}.xlsx"
+    
+    try:
+        with pd.ExcelWriter(excel_filepath, engine='openpyxl') as writer:
+            variance_df.to_excel(writer, sheet_name='Variance', index=False)
+            entropy_df.to_excel(writer, sheet_name='Entropy', index=False)
+        print(f"Saved combined statistics: {excel_filepath}")
+        print(f"  - Variance sheet: {len(variance_df)} rows, {len(variance_df.columns)} columns")
+        print(f"  - Entropy sheet: {len(entropy_df)} rows, {len(entropy_df.columns)} columns")
+        return excel_filepath
+    except ImportError:
+        print("Warning: openpyxl not available. Combined Excel file not saved.")
+        print("Install openpyxl with: pip install openpyxl")
+        return None
+    except Exception as e:
+        print(f"Error saving combined Excel file: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 def save_summary_text(text, filename, subfolder=''):
     """Save summary text to a file"""
     global stats_dir
@@ -238,7 +336,7 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
     ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
     ax2.set_xlabel('Training Data Percentage (%)', fontsize=12)
     ax2.set_ylabel('Correlation Coefficient', fontsize=12)
-    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
+    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty (Variance)\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
                   fontsize=13, fontweight='bold')
     ax2.legend(fontsize=10, loc='best')
     ax2.grid(True, alpha=0.3)
@@ -373,7 +471,7 @@ def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_n
     ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
     ax2.set_xlabel('Tau (Noise Level)', fontsize=12)
     ax2.set_ylabel('Correlation Coefficient', fontsize=12)
-    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()}, {distribution}){title_suffix}', 
+    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty (Variance)\n{function_name} Function ({noise_type.capitalize()}, {distribution}){title_suffix}', 
                   fontsize=13, fontweight='bold')
     ax2.legend(fontsize=10, loc='best')
     ax2.grid(True, alpha=0.3)
@@ -672,7 +770,7 @@ def save_summary_statistics_entropy(percentages, avg_ale_entropy_list, avg_epi_e
     ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
     ax2.set_xlabel('Training Data Percentage (%)', fontsize=12)
     ax2.set_ylabel('Correlation Coefficient', fontsize=12)
-    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
+    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty (Entropy)\n{function_name} Function ({noise_type.capitalize()}){title_suffix}', 
                   fontsize=13, fontweight='bold')
     ax2.legend(fontsize=10, loc='best')
     ax2.grid(True, alpha=0.3)
@@ -788,7 +886,7 @@ def save_summary_statistics_entropy_noise_level(tau_values, avg_ale_entropy_list
     ax2.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
     ax2.set_xlabel('Tau (Noise Level)', fontsize=12)
     ax2.set_ylabel('Correlation Coefficient', fontsize=12)
-    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty\n{function_name} Function ({noise_type.capitalize()}, {distribution}){title_suffix}', 
+    ax2.set_title(f'Correlation: Epistemic vs Aleatoric Uncertainty (Entropy)\n{function_name} Function ({noise_type.capitalize()}, {distribution}){title_suffix}', 
                   fontsize=13, fontweight='bold')
     ax2.legend(fontsize=10, loc='best')
     ax2.grid(True, alpha=0.3)

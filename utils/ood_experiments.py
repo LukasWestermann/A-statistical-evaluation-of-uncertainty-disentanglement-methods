@@ -10,6 +10,7 @@ uncertainty quantification models, handling the common pattern of:
 """
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.multiprocessing as mp
 from torch.utils.data import TensorDataset, DataLoader
@@ -18,7 +19,7 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
 
-from utils.results_save import save_summary_statistics_ood, save_summary_statistics_entropy_ood, save_model_outputs
+from utils.results_save import save_summary_statistics_ood, save_summary_statistics_entropy_ood, save_model_outputs, save_combined_statistics_excel
 from utils.plotting import plot_uncertainties_ood, plot_uncertainties_entropy_ood, plot_uncertainties_ood_normalized, plot_uncertainties_entropy_ood_normalized, plot_entropy_lines_ood
 from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 from utils.device import get_device_for_worker, get_num_gpus
@@ -945,7 +946,7 @@ def run_mc_dropout_ood_experiment(
         )
         
         # Compute and save variance-based statistics
-        compute_and_save_statistics_ood(
+        variance_stats_result = compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
@@ -961,12 +962,38 @@ def run_mc_dropout_ood_experiment(
         )
         
         # Compute and save entropy-based statistics
-        compute_and_save_statistics_entropy_ood(
+        entropy_stats_result = compute_and_save_statistics_entropy_ood(
             uncertainties_entropy_id, uncertainties_entropy_ood, uncertainties_entropy_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
             date=date, dropout_p=p, mc_samples=mc_samples
         )
+        
+        # Combine DataFrames from all regions (ID, OOD, Combined)
+        variance_dfs = []
+        entropy_dfs = []
+        for region in ['id', 'ood', 'combined']:
+            if region in variance_stats_result and 'stats_df' in variance_stats_result[region]:
+                df = variance_stats_result[region]['stats_df'].copy()
+                df.insert(0, 'Region', region.capitalize())
+                variance_dfs.append(df)
+            if region in entropy_stats_result and 'stats_df' in entropy_stats_result[region]:
+                df = entropy_stats_result[region]['stats_df'].copy()
+                df.insert(0, 'Region', region.capitalize())
+                entropy_dfs.append(df)
+        
+        if variance_dfs and entropy_dfs:
+            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
+            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_combined_df, entropy_combined_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='MC_Dropout',
+                subfolder=f"ood/{noise_type}/{func_type}",
+                date=date, dropout_p=p, mc_samples=mc_samples
+            )
 
 
 def run_deep_ensemble_ood_experiment(
@@ -1215,7 +1242,7 @@ def run_deep_ensemble_ood_experiment(
         )
         
         # Compute and save variance-based statistics
-        compute_and_save_statistics_ood(
+        variance_stats_result = compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
@@ -1231,12 +1258,38 @@ def run_deep_ensemble_ood_experiment(
         )
         
         # Compute and save entropy-based statistics
-        compute_and_save_statistics_entropy_ood(
+        entropy_stats_result = compute_and_save_statistics_entropy_ood(
             uncertainties_entropy_id, uncertainties_entropy_ood, uncertainties_entropy_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
             date=date, n_nets=K
         )
+        
+        # Combine DataFrames from all regions (ID, OOD, Combined)
+        variance_dfs = []
+        entropy_dfs = []
+        for region in ['id', 'ood', 'combined']:
+            if region in variance_stats_result and 'stats_df' in variance_stats_result[region]:
+                df = variance_stats_result[region]['stats_df'].copy()
+                df.insert(0, 'Region', region.capitalize())
+                variance_dfs.append(df)
+            if region in entropy_stats_result and 'stats_df' in entropy_stats_result[region]:
+                df = entropy_stats_result[region]['stats_df'].copy()
+                df.insert(0, 'Region', region.capitalize())
+                entropy_dfs.append(df)
+        
+        if variance_dfs and entropy_dfs:
+            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
+            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_combined_df, entropy_combined_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='Deep_Ensemble',
+                subfolder=f"ood/{noise_type}/{func_type}",
+                date=date, n_nets=K
+            )
 
 
 def run_bnn_ood_experiment(
@@ -1491,7 +1544,7 @@ def run_bnn_ood_experiment(
         )
         
         # Compute and save variance-based statistics
-        compute_and_save_statistics_ood(
+        variance_stats_result = compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'BNN',
@@ -1507,12 +1560,38 @@ def run_bnn_ood_experiment(
         )
         
         # Compute and save entropy-based statistics
-        compute_and_save_statistics_entropy_ood(
+        entropy_stats_result = compute_and_save_statistics_entropy_ood(
             uncertainties_entropy_id, uncertainties_entropy_ood, uncertainties_entropy_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'BNN',
             date=date
         )
+        
+        # Combine DataFrames from all regions (ID, OOD, Combined)
+        variance_dfs = []
+        entropy_dfs = []
+        for region in ['id', 'ood', 'combined']:
+            if region in variance_stats_result and 'stats_df' in variance_stats_result[region]:
+                df = variance_stats_result[region]['stats_df'].copy()
+                df.insert(0, 'Region', region.capitalize())
+                variance_dfs.append(df)
+            if region in entropy_stats_result and 'stats_df' in entropy_stats_result[region]:
+                df = entropy_stats_result[region]['stats_df'].copy()
+                df.insert(0, 'Region', region.capitalize())
+                entropy_dfs.append(df)
+        
+        if variance_dfs and entropy_dfs:
+            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
+            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_combined_df, entropy_combined_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='BNN',
+                subfolder=f"ood/{noise_type}/{func_type}",
+                date=date
+            )
 
 
 def run_bamlss_ood_experiment(
@@ -1749,7 +1828,7 @@ def run_bamlss_ood_experiment(
         )
         
         # Compute and save variance-based statistics
-        compute_and_save_statistics_ood(
+        variance_stats_result = compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
@@ -1765,10 +1844,36 @@ def run_bamlss_ood_experiment(
         )
         
         # Compute and save entropy-based statistics
-        compute_and_save_statistics_entropy_ood(
+        entropy_stats_result = compute_and_save_statistics_entropy_ood(
             uncertainties_entropy_id, uncertainties_entropy_ood, uncertainties_entropy_combined,
             mse_id, mse_ood, mse_combined,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
             date=date
         )
+        
+        # Combine DataFrames from all regions (ID, OOD, Combined)
+        variance_dfs = []
+        entropy_dfs = []
+        for region in ['id', 'ood', 'combined']:
+            if region in variance_stats_result and 'stats_df' in variance_stats_result[region]:
+                df = variance_stats_result[region]['stats_df'].copy()
+                df.insert(0, 'Region', region.capitalize())
+                variance_dfs.append(df)
+            if region in entropy_stats_result and 'stats_df' in entropy_stats_result[region]:
+                df = entropy_stats_result[region]['stats_df'].copy()
+                df.insert(0, 'Region', region.capitalize())
+                entropy_dfs.append(df)
+        
+        if variance_dfs and entropy_dfs:
+            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
+            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_combined_df, entropy_combined_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='BAMLSS',
+                subfolder=f"ood/{noise_type}/{func_type}",
+                date=date
+            )
 

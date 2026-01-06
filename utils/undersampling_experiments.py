@@ -10,6 +10,7 @@ uncertainty quantification models, handling the common pattern of:
 """
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.multiprocessing as mp
 from torch.utils.data import TensorDataset, DataLoader
@@ -18,7 +19,7 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
 
-from utils.results_save import save_summary_statistics_undersampling, save_model_outputs
+from utils.results_save import save_summary_statistics_undersampling, save_model_outputs, save_combined_statistics_excel
 from utils.plotting import (
     plot_uncertainties_undersampling,
     plot_entropy_lines_undersampling
@@ -1072,7 +1073,7 @@ def run_mc_dropout_undersampling_experiment(
         )
         
         # Compute and save variance-based statistics
-        compute_and_save_statistics_undersampling(
+        variance_stats_result = compute_and_save_statistics_undersampling(
             uncertainties_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
             date=date, dropout_p=p, mc_samples=mc_samples,
@@ -1082,11 +1083,40 @@ def run_mc_dropout_undersampling_experiment(
         )
         
         # Compute and save entropy-based statistics
-        compute_and_save_statistics_entropy_undersampling(
+        entropy_stats_result = compute_and_save_statistics_entropy_undersampling(
             uncertainties_entropy_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
             date=date, dropout_p=p, mc_samples=mc_samples
         )
+        
+        # Combine DataFrames from all regions
+        variance_dfs = []
+        entropy_dfs = []
+        for key in variance_stats_result.keys():
+            if 'stats_df' in variance_stats_result[key]:
+                df = variance_stats_result[key]['stats_df'].copy()
+                if 'Region' not in df.columns:
+                    df.insert(0, 'Region', key.capitalize())
+                variance_dfs.append(df)
+        for key in entropy_stats_result.keys():
+            if 'stats_df' in entropy_stats_result[key]:
+                df = entropy_stats_result[key]['stats_df'].copy()
+                if 'Region' not in df.columns:
+                    df.insert(0, 'Region', key.capitalize())
+                entropy_dfs.append(df)
+        
+        if variance_dfs and entropy_dfs:
+            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
+            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_combined_df, entropy_combined_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='MC_Dropout',
+                subfolder=f"undersampling/{noise_type}/{func_type}",
+                date=date, dropout_p=p, mc_samples=mc_samples
+            )
 
 
 def run_deep_ensemble_undersampling_experiment(
@@ -1276,7 +1306,7 @@ def run_deep_ensemble_undersampling_experiment(
         )
         
         # Compute and save variance-based statistics
-        compute_and_save_statistics_undersampling(
+        variance_stats_result = compute_and_save_statistics_undersampling(
             uncertainties_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
             date=date, n_nets=K,
@@ -1286,11 +1316,40 @@ def run_deep_ensemble_undersampling_experiment(
         )
         
         # Compute and save entropy-based statistics
-        compute_and_save_statistics_entropy_undersampling(
+        entropy_stats_result = compute_and_save_statistics_entropy_undersampling(
             uncertainties_entropy_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
             date=date, n_nets=K
         )
+        
+        # Combine DataFrames from all regions
+        variance_dfs = []
+        entropy_dfs = []
+        for key in variance_stats_result.keys():
+            if 'stats_df' in variance_stats_result[key]:
+                df = variance_stats_result[key]['stats_df'].copy()
+                if 'Region' not in df.columns:
+                    df.insert(0, 'Region', key.capitalize())
+                variance_dfs.append(df)
+        for key in entropy_stats_result.keys():
+            if 'stats_df' in entropy_stats_result[key]:
+                df = entropy_stats_result[key]['stats_df'].copy()
+                if 'Region' not in df.columns:
+                    df.insert(0, 'Region', key.capitalize())
+                entropy_dfs.append(df)
+        
+        if variance_dfs and entropy_dfs:
+            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
+            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_combined_df, entropy_combined_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='Deep_Ensemble',
+                subfolder=f"undersampling/{noise_type}/{func_type}",
+                date=date, n_nets=K
+            )
 
 
 def run_bnn_undersampling_experiment(
@@ -1514,7 +1573,7 @@ def run_bnn_undersampling_experiment(
         )
         
         # Compute and save variance-based statistics
-        compute_and_save_statistics_undersampling(
+        variance_stats_result = compute_and_save_statistics_undersampling(
             uncertainties_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'BNN',
             date=date,
@@ -1524,11 +1583,40 @@ def run_bnn_undersampling_experiment(
         )
         
         # Compute and save entropy-based statistics
-        compute_and_save_statistics_entropy_undersampling(
+        entropy_stats_result = compute_and_save_statistics_entropy_undersampling(
             uncertainties_entropy_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'BNN',
             date=date
         )
+        
+        # Combine DataFrames from all regions
+        variance_dfs = []
+        entropy_dfs = []
+        for key in variance_stats_result.keys():
+            if 'stats_df' in variance_stats_result[key]:
+                df = variance_stats_result[key]['stats_df'].copy()
+                if 'Region' not in df.columns:
+                    df.insert(0, 'Region', key.capitalize())
+                variance_dfs.append(df)
+        for key in entropy_stats_result.keys():
+            if 'stats_df' in entropy_stats_result[key]:
+                df = entropy_stats_result[key]['stats_df'].copy()
+                if 'Region' not in df.columns:
+                    df.insert(0, 'Region', key.capitalize())
+                entropy_dfs.append(df)
+        
+        if variance_dfs and entropy_dfs:
+            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
+            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_combined_df, entropy_combined_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='BNN',
+                subfolder=f"undersampling/{noise_type}/{func_type}",
+                date=date
+            )
 
 
 def run_bamlss_undersampling_experiment(
@@ -1734,7 +1822,7 @@ def run_bamlss_undersampling_experiment(
         )
         
         # Compute and save variance-based statistics
-        compute_and_save_statistics_undersampling(
+        variance_stats_result = compute_and_save_statistics_undersampling(
             uncertainties_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
             date=date,
@@ -1744,9 +1832,38 @@ def run_bamlss_undersampling_experiment(
         )
         
         # Compute and save entropy-based statistics
-        compute_and_save_statistics_entropy_undersampling(
+        entropy_stats_result = compute_and_save_statistics_entropy_undersampling(
             uncertainties_entropy_by_region, mse_by_region, sampling_regions,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
             date=date
         )
+        
+        # Combine DataFrames from all regions
+        variance_dfs = []
+        entropy_dfs = []
+        for key in variance_stats_result.keys():
+            if 'stats_df' in variance_stats_result[key]:
+                df = variance_stats_result[key]['stats_df'].copy()
+                if 'Region' not in df.columns:
+                    df.insert(0, 'Region', key.capitalize())
+                variance_dfs.append(df)
+        for key in entropy_stats_result.keys():
+            if 'stats_df' in entropy_stats_result[key]:
+                df = entropy_stats_result[key]['stats_df'].copy()
+                if 'Region' not in df.columns:
+                    df.insert(0, 'Region', key.capitalize())
+                entropy_dfs.append(df)
+        
+        if variance_dfs and entropy_dfs:
+            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
+            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_combined_df, entropy_combined_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='BAMLSS',
+                subfolder=f"undersampling/{noise_type}/{func_type}",
+                date=date
+            )
 

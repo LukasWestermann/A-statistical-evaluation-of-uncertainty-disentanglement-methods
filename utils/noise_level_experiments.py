@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
 
-from utils.results_save import save_summary_statistics_noise_level, save_summary_statistics_entropy_noise_level, save_model_outputs
+from utils.results_save import save_summary_statistics_noise_level, save_summary_statistics_entropy_noise_level, save_model_outputs, save_combined_statistics_excel
 from utils.plotting import (
     plot_uncertainties_no_ood,
     plot_uncertainties_entropy_no_ood,
@@ -920,7 +920,7 @@ def run_mc_dropout_noise_level_experiment(
                     )
             
             # Compute and save variance-based statistics
-            compute_and_save_statistics_noise_level(
+            variance_stats_result = compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'MC_Dropout',
@@ -929,13 +929,25 @@ def run_mc_dropout_noise_level_experiment(
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
                 spearman_epistemic_by_tau=spearman_epistemic_by_tau
             )
+            variance_stats_df = variance_stats_result['stats_df']
             
             # Compute and save entropy-based statistics
-            compute_and_save_statistics_entropy_noise_level(
+            entropy_stats_result = compute_and_save_statistics_entropy_noise_level(
                 uncertainties_entropy_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'MC_Dropout',
                 date=date, dropout_p=p, mc_samples=mc_samples
+            )
+            entropy_stats_df = entropy_stats_result['stats_df']
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_stats_df, entropy_stats_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='MC_Dropout',
+                subfolder=f"{noise_type}/{func_type}/{distribution}",
+                date=date, dropout_p=p, mc_samples=mc_samples,
+                distribution=distribution
             )
 
 
@@ -1278,7 +1290,7 @@ def run_deep_ensemble_noise_level_experiment(
                     )
             
             # Compute and save variance-based statistics
-            compute_and_save_statistics_noise_level(
+            variance_stats_result = compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'Deep_Ensemble',
@@ -1287,13 +1299,24 @@ def run_deep_ensemble_noise_level_experiment(
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
                 spearman_epistemic_by_tau=spearman_epistemic_by_tau
             )
+            variance_stats_df = variance_stats_result['stats_df']
             
             # Compute and save entropy-based statistics
-            compute_and_save_statistics_entropy_noise_level(
+            entropy_stats_result = compute_and_save_statistics_entropy_noise_level(
                 uncertainties_entropy_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'Deep_Ensemble',
                 date=date, n_nets=K
+            )
+            entropy_stats_df = entropy_stats_result['stats_df']
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_stats_df, entropy_stats_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='Deep_Ensemble',
+                subfolder=f"{noise_type}/{func_type}/{distribution}",
+                date=date, n_nets=K, distribution=distribution
             )
 
 
@@ -1641,7 +1664,7 @@ def run_bnn_noise_level_experiment(
                     )
             
             # Compute and save variance-based statistics
-            compute_and_save_statistics_noise_level(
+            variance_stats_result = compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'BNN',
@@ -1650,13 +1673,24 @@ def run_bnn_noise_level_experiment(
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
                 spearman_epistemic_by_tau=spearman_epistemic_by_tau
             )
+            variance_stats_df = variance_stats_result['stats_df']
             
             # Compute and save entropy-based statistics
-            compute_and_save_statistics_entropy_noise_level(
+            entropy_stats_result = compute_and_save_statistics_entropy_noise_level(
                 uncertainties_entropy_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'BNN',
                 date=date
+            )
+            entropy_stats_df = entropy_stats_result['stats_df']
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_stats_df, entropy_stats_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='BNN',
+                subfolder=f"{noise_type}/{func_type}/{distribution}",
+                date=date, distribution=distribution
             )
 
 
@@ -1981,7 +2015,7 @@ def run_bamlss_noise_level_experiment(
                     )
             
             # Compute and save variance-based statistics
-            compute_and_save_statistics_noise_level(
+            variance_stats_result = compute_and_save_statistics_noise_level(
                 uncertainties_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'BAMLSS',
@@ -1990,12 +2024,23 @@ def run_bamlss_noise_level_experiment(
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
                 spearman_epistemic_by_tau=spearman_epistemic_by_tau
             )
+            variance_stats_df = variance_stats_result['stats_df']
             
             # Compute and save entropy-based statistics
-            compute_and_save_statistics_entropy_noise_level(
+            entropy_stats_result = compute_and_save_statistics_entropy_noise_level(
                 uncertainties_entropy_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'BAMLSS',
                 date=date
+            )
+            entropy_stats_df = entropy_stats_result['stats_df']
+            
+            # Save combined Excel file
+            save_combined_statistics_excel(
+                variance_stats_df, entropy_stats_df,
+                function_names[func_type], noise_type=noise_type,
+                func_type=func_type, model_name='BAMLSS',
+                subfolder=f"{noise_type}/{func_type}/{distribution}",
+                date=date, distribution=distribution
             )
 

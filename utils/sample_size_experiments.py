@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
 
-from utils.results_save import save_summary_statistics, save_summary_statistics_entropy, save_model_outputs
+from utils.results_save import save_summary_statistics, save_summary_statistics_entropy, save_model_outputs, save_combined_statistics_excel
 from utils.plotting import (
     plot_uncertainties_no_ood, 
     plot_uncertainties_entropy_no_ood,
@@ -961,7 +961,7 @@ def run_mc_dropout_sample_size_experiment(
                 )
         
         # Compute and save variance-based statistics
-        compute_and_save_statistics(
+        variance_stats_df, _ = compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
             mse_by_pct=mse_by_pct,
@@ -972,10 +972,19 @@ def run_mc_dropout_sample_size_experiment(
         )
         
         # Compute and save entropy-based statistics
-        compute_and_save_statistics_entropy(
+        entropy_stats_df, _ = compute_and_save_statistics_entropy(
             uncertainties_entropy_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
             mse_by_pct=mse_by_pct,
+            date=date, dropout_p=p, mc_samples=mc_samples
+        )
+        
+        # Save combined Excel file
+        save_combined_statistics_excel(
+            variance_stats_df, entropy_stats_df,
+            function_names[func_type], noise_type=noise_type,
+            func_type=func_type, model_name='MC_Dropout',
+            subfolder=f"{noise_type}/{func_type}",
             date=date, dropout_p=p, mc_samples=mc_samples
         )
 
@@ -1310,8 +1319,8 @@ def run_deep_ensemble_sample_size_experiment(
                     func_type=func_type
                 )
         
-        # Compute and save statistics
-        compute_and_save_statistics(
+        # Compute and save variance-based statistics
+        variance_stats_df, _ = compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
             mse_by_pct=mse_by_pct,
@@ -1319,6 +1328,23 @@ def run_deep_ensemble_sample_size_experiment(
             nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
             spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
             spearman_epistemic_by_pct=spearman_epistemic_by_pct
+        )
+        
+        # Compute and save entropy-based statistics
+        entropy_stats_df, _ = compute_and_save_statistics_entropy(
+            uncertainties_entropy_by_pct, percentages,
+            function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
+            mse_by_pct=mse_by_pct,
+            date=date, n_nets=K
+        )
+        
+        # Save combined Excel file
+        save_combined_statistics_excel(
+            variance_stats_df, entropy_stats_df,
+            function_names[func_type], noise_type=noise_type,
+            func_type=func_type, model_name='Deep_Ensemble',
+            subfolder=f"{noise_type}/{func_type}",
+            date=date, n_nets=K
         )
 
 
@@ -1625,8 +1651,8 @@ def run_bnn_sample_size_experiment(
                     func_type=func_type
                 )
         
-        # Compute and save statistics
-        compute_and_save_statistics(
+        # Compute and save variance-based statistics
+        variance_stats_df, _ = compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'BNN',
             mse_by_pct=mse_by_pct,
@@ -1634,6 +1660,23 @@ def run_bnn_sample_size_experiment(
             nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
             spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
             spearman_epistemic_by_pct=spearman_epistemic_by_pct
+        )
+        
+        # Compute and save entropy-based statistics
+        entropy_stats_df, _ = compute_and_save_statistics_entropy(
+            uncertainties_entropy_by_pct, percentages,
+            function_names[func_type], noise_type, func_type, 'BNN',
+            mse_by_pct=mse_by_pct,
+            date=date
+        )
+        
+        # Save combined Excel file
+        save_combined_statistics_excel(
+            variance_stats_df, entropy_stats_df,
+            function_names[func_type], noise_type=noise_type,
+            func_type=func_type, model_name='BNN',
+            subfolder=f"{noise_type}/{func_type}",
+            date=date
         )
 
 
@@ -1938,8 +1981,8 @@ def run_bamlss_sample_size_experiment(
                     func_type=func_type
                 )
         
-        # Compute and save statistics
-        compute_and_save_statistics(
+        # Compute and save variance-based statistics
+        variance_stats_df, _ = compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
             mse_by_pct=mse_by_pct,
@@ -1947,5 +1990,22 @@ def run_bamlss_sample_size_experiment(
             nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
             spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
             spearman_epistemic_by_pct=spearman_epistemic_by_pct
+        )
+        
+        # Compute and save entropy-based statistics
+        entropy_stats_df, _ = compute_and_save_statistics_entropy(
+            uncertainties_entropy_by_pct, percentages,
+            function_names[func_type], noise_type, func_type, 'BAMLSS',
+            mse_by_pct=mse_by_pct,
+            date=date
+        )
+        
+        # Save combined Excel file
+        save_combined_statistics_excel(
+            variance_stats_df, entropy_stats_df,
+            function_names[func_type], noise_type=noise_type,
+            func_type=func_type, model_name='BAMLSS',
+            subfolder=f"{noise_type}/{func_type}",
+            date=date
         )
 
