@@ -69,8 +69,8 @@ def save_plot(fig, filename, subfolder=''):
     print(f"Saved plot: {filepath}")
     return filepath
 
-def save_statistics(data_dict, filename, subfolder='', save_excel=True):
-    """Save statistics dictionary to CSV and optionally Excel"""
+def save_statistics(data_dict, filename, subfolder=''):
+    """Save statistics dictionary to Excel file only"""
     global stats_dir
     if stats_dir is None:
         _, stats_dir = _get_default_dirs()
@@ -82,28 +82,396 @@ def save_statistics(data_dict, filename, subfolder='', save_excel=True):
         save_dir = stats_dir
         save_dir.mkdir(parents=True, exist_ok=True)
     
-    # Convert to DataFrame if it's a dict
+    # Convert to DataFrame if it's a dict or list
     if isinstance(data_dict, dict):
+        # Wrap scalar dict in list to create single-row DataFrame
+        df = pd.DataFrame([data_dict])
+    elif isinstance(data_dict, list):
         df = pd.DataFrame(data_dict)
     else:
         df = data_dict
     
-    # Save as CSV
-    csv_filepath = save_dir / f"{sanitize_filename(filename)}.csv"
-    df.to_csv(csv_filepath, index=False)
+    # Save as Excel only
+    excel_filepath = save_dir / f"{sanitize_filename(filename)}.xlsx"
+    try:
+        df.to_excel(excel_filepath, index=False, engine='openpyxl')
+        print(f"Saved statistics: {excel_filepath}")
+        return excel_filepath
+    except ImportError:
+        print("Error: openpyxl not available. Excel file not saved.")
+        print("Install openpyxl with: pip install openpyxl")
+        raise
+    except Exception as e:
+        print(f"Error saving Excel file: {e}")
+        raise
+
+def save_combined_noise_level_excel(accumulated_stats, noise_type='heteroscedastic', 
+                                    distribution='normal', date=None, subfolder=''):
+    """
+    Save accumulated noise level statistics to a single Excel file with multiple sheets.
     
-    # Save as Excel if requested
-    if save_excel:
-        try:
-            excel_filepath = save_dir / f"{sanitize_filename(filename)}.xlsx"
-            df.to_excel(excel_filepath, index=False, engine='openpyxl')
-            return csv_filepath, excel_filepath
-        except ImportError:
-            print("Warning: openpyxl not available. Excel file not saved. Only CSV saved.")
-            print("Install openpyxl with: pip install openpyxl")
-            return csv_filepath
+    Each sheet is named as {Model}_{FunctionType} (e.g., "MC_Dropout_linear", "Deep_Ensemble_sin")
     
-    return csv_filepath
+    Args:
+        accumulated_stats: Dictionary with structure:
+            {
+                (model_name, func_type): {
+                    'variance': DataFrame with variance statistics,
+                    'entropy': DataFrame with entropy statistics (optional)
+                }
+            }
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        distribution: Noise distribution ('normal' or 'laplace')
+        date: Optional date string in YYYYMMDD format
+        subfolder: Subfolder path for saving
+    
+    Returns:
+        Path: Path to saved Excel file
+    """
+    global stats_dir
+    if stats_dir is None:
+        _, stats_dir = _get_default_dirs()
+    
+    if subfolder:
+        save_dir = stats_dir / subfolder
+    else:
+        save_dir = stats_dir / "noise_level"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Build filename
+    filename = f"noise_level_{noise_type}_{distribution}_combined"
+    if date:
+        filename = f"{date}_{filename}"
+    
+    excel_filepath = save_dir / f"{sanitize_filename(filename)}.xlsx"
+    
+    try:
+        with pd.ExcelWriter(excel_filepath, engine='openpyxl') as writer:
+            # Sort keys for consistent ordering
+            sorted_keys = sorted(accumulated_stats.keys())
+            
+            for (model_name, func_type) in sorted_keys:
+                stats_data = accumulated_stats[(model_name, func_type)]
+                
+                # Create sheet name: Model_FunctionType (max 31 chars for Excel)
+                sheet_name = f"{model_name}_{func_type}"
+                # Excel sheet names are limited to 31 characters
+                if len(sheet_name) > 31:
+                    sheet_name = sheet_name[:31]
+                
+                # Prepare data to write
+                variance_df = stats_data.get('variance')
+                entropy_df = stats_data.get('entropy')
+                
+                # Combine variance and entropy if both exist
+                if variance_df is not None and len(variance_df) > 0:
+                    if entropy_df is not None and len(entropy_df) > 0:
+                        # Rename entropy columns to avoid conflicts (except common columns)
+                        entropy_df_renamed = entropy_df.copy()
+                        rename_dict = {}
+                        for col in entropy_df.columns:
+                            if col not in ['Tau', 'Distribution']:  # Keep common columns as-is
+                                rename_dict[col] = f"{col}_entropy"
+                        entropy_df_renamed = entropy_df_renamed.rename(columns=rename_dict)
+                        
+                        # Merge on common columns (Tau, Distribution)
+                        merged_df = pd.merge(variance_df, entropy_df_renamed, 
+                                            on=['Tau', 'Distribution'], how='outer')
+                        merged_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        print(f"  - Sheet '{sheet_name}': Combined variance + entropy ({len(merged_df)} rows)")
+                    else:
+                        # Only variance
+                        variance_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        print(f"  - Sheet '{sheet_name}': Variance only ({len(variance_df)} rows)")
+                elif entropy_df is not None and len(entropy_df) > 0:
+                    # Only entropy
+                    entropy_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    print(f"  - Sheet '{sheet_name}': Entropy only ({len(entropy_df)} rows)")
+                else:
+                    print(f"  - Warning: Sheet '{sheet_name}' has no data, skipping")
+        
+        print(f"\nSaved combined noise level statistics: {excel_filepath}")
+        print(f"  Total sheets: {len(sorted_keys)}")
+        return excel_filepath
+        
+    except ImportError:
+        print("Error: openpyxl not available. Combined Excel file not saved.")
+        print("Install openpyxl with: pip install openpyxl")
+        raise
+    except Exception as e:
+        print(f"Error saving combined Excel file: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def save_combined_sample_size_excel(accumulated_stats, noise_type='heteroscedastic', 
+                                    date=None, subfolder=''):
+    """
+    Save accumulated sample size statistics to a single Excel file with multiple sheets.
+    
+    Each sheet is named as {Model}_{FunctionType} (e.g., "MC_Dropout_linear", "Deep_Ensemble_sin")
+    
+    Args:
+        accumulated_stats: Dictionary with structure:
+            {
+                (model_name, func_type): {
+                    'variance': DataFrame with variance statistics,
+                    'entropy': DataFrame with entropy statistics (optional)
+                }
+            }
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        date: Optional date string in YYYYMMDD format
+        subfolder: Subfolder path for saving
+    
+    Returns:
+        Path: Path to saved Excel file
+    """
+    global stats_dir
+    if stats_dir is None:
+        _, stats_dir = _get_default_dirs()
+    
+    if subfolder:
+        save_dir = stats_dir / subfolder
+    else:
+        save_dir = stats_dir / "sample_size"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Build filename
+    filename = f"sample_size_{noise_type}_combined"
+    if date:
+        filename = f"{date}_{filename}"
+    
+    excel_filepath = save_dir / f"{sanitize_filename(filename)}.xlsx"
+    
+    try:
+        with pd.ExcelWriter(excel_filepath, engine='openpyxl') as writer:
+            sorted_keys = sorted(accumulated_stats.keys())
+            
+            for (model_name, func_type) in sorted_keys:
+                stats_data = accumulated_stats[(model_name, func_type)]
+                
+                sheet_name = f"{model_name}_{func_type}"
+                if len(sheet_name) > 31:
+                    sheet_name = sheet_name[:31]
+                
+                variance_df = stats_data.get('variance')
+                entropy_df = stats_data.get('entropy')
+                
+                if variance_df is not None and len(variance_df) > 0:
+                    if entropy_df is not None and len(entropy_df) > 0:
+                        entropy_df_renamed = entropy_df.copy()
+                        rename_dict = {}
+                        for col in entropy_df.columns:
+                            if col not in ['Percentage']:
+                                rename_dict[col] = f"{col}_entropy"
+                        entropy_df_renamed = entropy_df_renamed.rename(columns=rename_dict)
+                        merged_df = pd.merge(variance_df, entropy_df_renamed, on=['Percentage'], how='outer')
+                        merged_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        print(f"  - Sheet '{sheet_name}': Combined variance + entropy ({len(merged_df)} rows)")
+                    else:
+                        variance_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        print(f"  - Sheet '{sheet_name}': Variance only ({len(variance_df)} rows)")
+                elif entropy_df is not None and len(entropy_df) > 0:
+                    entropy_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    print(f"  - Sheet '{sheet_name}': Entropy only ({len(entropy_df)} rows)")
+                else:
+                    print(f"  - Warning: Sheet '{sheet_name}' has no data, skipping")
+        
+        print(f"\nSaved combined sample size statistics: {excel_filepath}")
+        print(f"  Total sheets: {len(sorted_keys)}")
+        return excel_filepath
+        
+    except ImportError:
+        print("Error: openpyxl not available. Combined Excel file not saved.")
+        print("Install openpyxl with: pip install openpyxl")
+        raise
+    except Exception as e:
+        print(f"Error saving combined Excel file: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def save_combined_undersampling_excel(accumulated_stats, noise_type='heteroscedastic', 
+                                     date=None, subfolder=''):
+    """
+    Save accumulated undersampling statistics to a single Excel file with multiple sheets.
+    
+    Each sheet is named as {Model}_{FunctionType}_{RegionName} (e.g., "MC_Dropout_linear_Region_1")
+    
+    Args:
+        accumulated_stats: Dictionary with structure:
+            {
+                (model_name, func_type, region_name): {
+                    'variance': DataFrame with variance statistics,
+                    'entropy': DataFrame with entropy statistics (optional)
+                }
+            }
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        date: Optional date string in YYYYMMDD format
+        subfolder: Subfolder path for saving
+    
+    Returns:
+        Path: Path to saved Excel file
+    """
+    global stats_dir
+    if stats_dir is None:
+        _, stats_dir = _get_default_dirs()
+    
+    if subfolder:
+        save_dir = stats_dir / subfolder
+    else:
+        save_dir = stats_dir / "undersampling"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Build filename
+    filename = f"undersampling_{noise_type}_combined"
+    if date:
+        filename = f"{date}_{filename}"
+    
+    excel_filepath = save_dir / f"{sanitize_filename(filename)}.xlsx"
+    
+    try:
+        with pd.ExcelWriter(excel_filepath, engine='openpyxl') as writer:
+            sorted_keys = sorted(accumulated_stats.keys())
+            
+            for (model_name, func_type, region_name) in sorted_keys:
+                stats_data = accumulated_stats[(model_name, func_type, region_name)]
+                
+                sheet_name = f"{model_name}_{func_type}_{region_name}"
+                if len(sheet_name) > 31:
+                    sheet_name = sheet_name[:31]
+                
+                variance_df = stats_data.get('variance')
+                entropy_df = stats_data.get('entropy')
+                
+                if variance_df is not None and len(variance_df) > 0:
+                    if entropy_df is not None and len(entropy_df) > 0:
+                        entropy_df_renamed = entropy_df.copy()
+                        rename_dict = {}
+                        for col in entropy_df.columns:
+                            if col not in ['Region']:
+                                rename_dict[col] = f"{col}_entropy"
+                        entropy_df_renamed = entropy_df_renamed.rename(columns=rename_dict)
+                        # Merge on common columns if any, otherwise concatenate
+                        if 'Region' in variance_df.columns and 'Region' in entropy_df_renamed.columns:
+                            merged_df = pd.merge(variance_df, entropy_df_renamed, on=['Region'], how='outer')
+                        else:
+                            merged_df = pd.concat([variance_df, entropy_df_renamed], axis=1)
+                        merged_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        print(f"  - Sheet '{sheet_name}': Combined variance + entropy ({len(merged_df)} rows)")
+                    else:
+                        variance_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        print(f"  - Sheet '{sheet_name}': Variance only ({len(variance_df)} rows)")
+                elif entropy_df is not None and len(entropy_df) > 0:
+                    entropy_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    print(f"  - Sheet '{sheet_name}': Entropy only ({len(entropy_df)} rows)")
+                else:
+                    print(f"  - Warning: Sheet '{sheet_name}' has no data, skipping")
+        
+        print(f"\nSaved combined undersampling statistics: {excel_filepath}")
+        print(f"  Total sheets: {len(sorted_keys)}")
+        return excel_filepath
+        
+    except ImportError:
+        print("Error: openpyxl not available. Combined Excel file not saved.")
+        print("Install openpyxl with: pip install openpyxl")
+        raise
+    except Exception as e:
+        print(f"Error saving combined Excel file: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def save_combined_ood_excel(accumulated_stats, noise_type='heteroscedastic', 
+                            date=None, subfolder=''):
+    """
+    Save accumulated OOD statistics to a single Excel file with multiple sheets.
+    
+    Each sheet is named as {Model}_{FunctionType}_{RegionType} (e.g., "MC_Dropout_linear_ID")
+    
+    Args:
+        accumulated_stats: Dictionary with structure:
+            {
+                (model_name, func_type, region_type): {
+                    'variance': DataFrame with variance statistics,
+                    'entropy': DataFrame with entropy statistics (optional)
+                }
+            }
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        date: Optional date string in YYYYMMDD format
+        subfolder: Subfolder path for saving
+    
+    Returns:
+        Path: Path to saved Excel file
+    """
+    global stats_dir
+    if stats_dir is None:
+        _, stats_dir = _get_default_dirs()
+    
+    if subfolder:
+        save_dir = stats_dir / subfolder
+    else:
+        save_dir = stats_dir / "ood"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Build filename
+    filename = f"ood_{noise_type}_combined"
+    if date:
+        filename = f"{date}_{filename}"
+    
+    excel_filepath = save_dir / f"{sanitize_filename(filename)}.xlsx"
+    
+    try:
+        with pd.ExcelWriter(excel_filepath, engine='openpyxl') as writer:
+            sorted_keys = sorted(accumulated_stats.keys())
+            
+            for (model_name, func_type, region_type) in sorted_keys:
+                stats_data = accumulated_stats[(model_name, func_type, region_type)]
+                
+                sheet_name = f"{model_name}_{func_type}_{region_type}"
+                if len(sheet_name) > 31:
+                    sheet_name = sheet_name[:31]
+                
+                variance_df = stats_data.get('variance')
+                entropy_df = stats_data.get('entropy')
+                
+                if variance_df is not None and len(variance_df) > 0:
+                    if entropy_df is not None and len(entropy_df) > 0:
+                        entropy_df_renamed = entropy_df.copy()
+                        rename_dict = {}
+                        for col in entropy_df.columns:
+                            rename_dict[col] = f"{col}_entropy"
+                        entropy_df_renamed = entropy_df_renamed.rename(columns=rename_dict)
+                        # Concatenate since OOD stats are single-row DataFrames
+                        merged_df = pd.concat([variance_df, entropy_df_renamed], axis=1)
+                        merged_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        print(f"  - Sheet '{sheet_name}': Combined variance + entropy ({len(merged_df)} rows)")
+                    else:
+                        variance_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        print(f"  - Sheet '{sheet_name}': Variance only ({len(variance_df)} rows)")
+                elif entropy_df is not None and len(entropy_df) > 0:
+                    entropy_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    print(f"  - Sheet '{sheet_name}': Entropy only ({len(entropy_df)} rows)")
+                else:
+                    print(f"  - Warning: Sheet '{sheet_name}' has no data, skipping")
+        
+        print(f"\nSaved combined OOD statistics: {excel_filepath}")
+        print(f"  Total sheets: {len(sorted_keys)}")
+        return excel_filepath
+        
+    except ImportError:
+        print("Error: openpyxl not available. Combined Excel file not saved.")
+        print("Install openpyxl with: pip install openpyxl")
+        raise
+    except Exception as e:
+        print(f"Error saving combined Excel file: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
 
 def save_combined_statistics_excel(variance_df, entropy_df, function_name, noise_type='heteroscedastic',
                                    func_type='', model_name='', subfolder='', date=None,
@@ -227,7 +595,8 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
                            noise_type='heteroscedastic', func_type='', model_name='',
                            mse_list=None, date=None, dropout_p=None, mc_samples=None, n_nets=None,
                            nll_list=None, crps_list=None,
-                           spearman_aleatoric_list=None, spearman_epistemic_list=None):
+                           spearman_aleatoric_list=None, spearman_epistemic_list=None,
+                           save_individual=True):
     """Helper function to save summary statistics and create summary plot
     
     Args:
@@ -245,6 +614,7 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
         dropout_p: Optional dropout probability for MC Dropout (float)
         mc_samples: Optional number of MC samples for MC Dropout (int)
         n_nets: Optional number of nets for Deep Ensemble (int)
+        save_individual: If True, save individual Excel file. If False, only return DataFrame.
     
     Returns:
         tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
@@ -300,9 +670,10 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
     if date:
         filename = f"{date}_{filename}"
     
-    # Save statistics to CSV and Excel (Excel is saved automatically)
-    save_statistics(stats_df, filename, 
-                    subfolder=f"{noise_type}/{func_type}", save_excel=True)
+    # Save statistics to Excel (only if save_individual is True)
+    if save_individual:
+        save_statistics(stats_df, filename, 
+                        subfolder=f"{noise_type}/{func_type}")
     
     # Create and save summary plots
     # Use 3 subplots if MSE is provided, otherwise 2
@@ -369,7 +740,8 @@ def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_n
                                        noise_type='heteroscedastic', func_type='', model_name='',
                                        date=None, dropout_p=None, mc_samples=None, n_nets=None,
                                        nll_list=None, crps_list=None,
-                                       spearman_aleatoric_list=None, spearman_epistemic_list=None):
+                                       spearman_aleatoric_list=None, spearman_epistemic_list=None,
+                                       save_individual=True):
     """Helper function to save summary statistics and create summary plot for noise level experiments
     
     Args:
@@ -388,6 +760,7 @@ def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_n
         dropout_p: Optional dropout probability for MC Dropout (float)
         mc_samples: Optional number of MC samples for MC Dropout (int)
         n_nets: Optional number of nets for Deep Ensemble (int)
+        save_individual: If True, save individual Excel file. If False, only return DataFrame.
     
     Returns:
         tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
@@ -441,9 +814,10 @@ def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_n
     if date:
         filename = f"{date}_{filename}"
     
-    # Save statistics to CSV and Excel (Excel is saved automatically)
-    save_statistics(stats_df, filename, 
-                    subfolder=f"{noise_type}/{func_type}/{distribution}", save_excel=True)
+    # Save statistics to Excel (only if save_individual is True)
+    if save_individual:
+        save_statistics(stats_df, filename, 
+                        subfolder=f"{noise_type}/{func_type}/{distribution}")
     
     # Create and save summary plots (uncertainties, correlations, and MSE)
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 6))
@@ -501,7 +875,8 @@ def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list,
                                 func_type='', model_name='', region_type='ID',
                                 date=None, dropout_p=None, mc_samples=None, n_nets=None,
                                 nll_list=None, crps_list=None,
-                                spearman_aleatoric_list=None, spearman_epistemic_list=None):
+                                spearman_aleatoric_list=None, spearman_epistemic_list=None,
+                                save_individual=True):
     """Helper function to save summary statistics for OOD experiments
     
     Args:
@@ -523,6 +898,7 @@ def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list,
         crps_list: Optional list of CRPS values
         spearman_aleatoric_list: Optional list of Spearman correlations (aleatoric)
         spearman_epistemic_list: Optional list of Spearman correlations (epistemic)
+        save_individual: If True, save individual Excel file. If False, only return DataFrame.
     
     Returns:
         tuple: (stats_df, None) - DataFrame with statistics (plots removed, only uncertainty plots with data points are displayed)
@@ -573,12 +949,13 @@ def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list,
     if date:
         filename = f"{date}_{filename}"
     
-    # Save statistics to CSV and Excel (Excel is saved automatically)
-    save_statistics(stats_df, filename, 
-                    subfolder=f"ood/{noise_type}/{func_type}", save_excel=True)
+    # Save statistics to Excel (only if save_individual is True)
+    if save_individual:
+        save_statistics(stats_df, filename, 
+                        subfolder=f"ood/{noise_type}/{func_type}")
     
     # Summary plots removed - only uncertainty plots with data points are displayed
-    # All statistics are printed to console and saved to Excel/CSV
+    # All statistics are printed to console and saved to Excel
     
     return stats_df, None
 
@@ -589,7 +966,8 @@ def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list,
                                          date=None, dropout_p=None, mc_samples=None, n_nets=None,
                                          density_factor=None,
                                          nll_list=None, crps_list=None,
-                                         spearman_aleatoric_list=None, spearman_epistemic_list=None):
+                                         spearman_aleatoric_list=None, spearman_epistemic_list=None,
+                                         save_individual=True):
     """Helper function to save summary statistics and create summary plot for undersampling experiments
     
     Args:
@@ -608,6 +986,7 @@ def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list,
         mc_samples: Optional number of MC samples for MC Dropout (int)
         n_nets: Optional number of nets for Deep Ensemble (int)
         density_factor: Optional density factor for filename
+        save_individual: If True, save individual Excel file. If False, only return DataFrame.
     
     Returns:
         tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
@@ -659,9 +1038,10 @@ def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list,
     if date:
         filename = f"{date}_{filename}"
     
-    # Save statistics to CSV and Excel (Excel is saved automatically)
-    save_statistics(stats_df, filename, 
-                    subfolder=f"undersampling/{noise_type}/{func_type}", save_excel=True)
+    # Save statistics to Excel (only if save_individual is True)
+    if save_individual:
+        save_statistics(stats_df, filename, 
+                        subfolder=f"undersampling/{noise_type}/{func_type}")
     
     # Skip plot creation - only return statistics DataFrame
     return stats_df, None
@@ -672,7 +1052,8 @@ def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list,
 def save_summary_statistics_entropy(percentages, avg_ale_entropy_list, avg_epi_entropy_list, 
                                    avg_tot_entropy_list, correlation_list, function_name, 
                                    noise_type='heteroscedastic', func_type='', model_name='',
-                                   mse_list=None, date=None, dropout_p=None, mc_samples=None, n_nets=None):
+                                   mse_list=None, date=None, dropout_p=None, mc_samples=None, n_nets=None,
+                                   save_individual=True):
     """Helper function to save normalized entropy-based summary statistics and create summary plot
     
     Args:
@@ -690,6 +1071,7 @@ def save_summary_statistics_entropy(percentages, avg_ale_entropy_list, avg_epi_e
         dropout_p: Optional dropout probability for MC Dropout (float)
         mc_samples: Optional number of MC samples for MC Dropout (int)
         n_nets: Optional number of nets for Deep Ensemble (int)
+        save_individual: If True, save individual Excel file. If False, only return DataFrame.
     
     Returns:
         tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
@@ -737,9 +1119,10 @@ def save_summary_statistics_entropy(percentages, avg_ale_entropy_list, avg_epi_e
     if date:
         filename = f"{date}_{filename}"
     
-    # Save statistics to CSV and Excel
-    save_statistics(stats_df, filename, 
-                    subfolder=f"{noise_type}/{func_type}", save_excel=True)
+    # Save statistics to Excel (only if save_individual is True)
+    if save_individual:
+        save_statistics(stats_df, filename, 
+                        subfolder=f"{noise_type}/{func_type}")
     
     # Create and save summary plots
     if mse_list is not None:
@@ -802,7 +1185,8 @@ def save_summary_statistics_entropy_noise_level(tau_values, avg_ale_entropy_list
                                                avg_tot_entropy_list, correlation_list, mse_list,
                                                function_name, distribution='normal',
                                                noise_type='heteroscedastic', func_type='', model_name='',
-                                               date=None, dropout_p=None, mc_samples=None, n_nets=None):
+                                               date=None, dropout_p=None, mc_samples=None, n_nets=None,
+                                               save_individual=True):
     """Helper function to save normalized entropy-based summary statistics for noise level experiments
     
     Args:
@@ -821,6 +1205,7 @@ def save_summary_statistics_entropy_noise_level(tau_values, avg_ale_entropy_list
         dropout_p: Optional dropout probability for MC Dropout (float)
         mc_samples: Optional number of MC samples for MC Dropout (int)
         n_nets: Optional number of nets for Deep Ensemble (int)
+        save_individual: If True, save individual Excel file. If False, only return DataFrame.
     
     Returns:
         tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
@@ -860,8 +1245,10 @@ def save_summary_statistics_entropy_noise_level(tau_values, avg_ale_entropy_list
     if date:
         filename = f"{date}_{filename}"
     
-    save_statistics(stats_df, filename, 
-                    subfolder=f"{noise_type}/{func_type}", save_excel=True)
+    # Save statistics to Excel (only if save_individual is True)
+    if save_individual:
+        save_statistics(stats_df, filename, 
+                        subfolder=f"{noise_type}/{func_type}")
     
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 6))
     title_suffix = f" - {model_name}" if model_name else ""
@@ -917,7 +1304,8 @@ def save_summary_statistics_entropy_ood(avg_ale_entropy_list, avg_epi_entropy_li
                                        func_type='', model_name='', region_type='ID',
                                        date=None, dropout_p=None, mc_samples=None, n_nets=None,
                                        nll_list=None, crps_list=None,
-                                       spearman_aleatoric_list=None, spearman_epistemic_list=None):
+                                       spearman_aleatoric_list=None, spearman_epistemic_list=None,
+                                       save_individual=True):
     """Helper function to save normalized entropy-based summary statistics for OOD experiments
     
     Args:
@@ -939,10 +1327,7 @@ def save_summary_statistics_entropy_ood(avg_ale_entropy_list, avg_epi_entropy_li
         crps_list: Optional list of CRPS values
         spearman_aleatoric_list: Optional list of Spearman correlations (aleatoric)
         spearman_epistemic_list: Optional list of Spearman correlations (epistemic)
-        nll_list: Optional list of NLL values
-        crps_list: Optional list of CRPS values
-        spearman_aleatoric_list: Optional list of Spearman correlations (aleatoric)
-        spearman_epistemic_list: Optional list of Spearman correlations (epistemic)
+        save_individual: If True, save individual Excel file. If False, only return DataFrame.
     
     Returns:
         tuple: (stats_df, None) - DataFrame with statistics (plots removed, only uncertainty plots with data points are displayed)
@@ -988,11 +1373,13 @@ def save_summary_statistics_entropy_ood(avg_ale_entropy_list, avg_epi_entropy_li
     if date:
         filename = f"{date}_{filename}"
     
-    save_statistics(stats_df, filename, 
-                    subfolder=f"ood/{noise_type}/{func_type}", save_excel=True)
+    # Save statistics to Excel (only if save_individual is True)
+    if save_individual:
+        save_statistics(stats_df, filename, 
+                        subfolder=f"ood/{noise_type}/{func_type}")
     
     # Summary plots removed - only uncertainty plots with data points are displayed
-    # All statistics are printed to console and saved to Excel/CSV
+    # All statistics are printed to console and saved to Excel
     
     return stats_df, None
 
@@ -1002,7 +1389,7 @@ def save_summary_statistics_entropy_undersampling(avg_ale_entropy_list, avg_epi_
                                                   function_name, noise_type='heteroscedastic', 
                                                   func_type='', model_name='', region_name='Region',
                                                   date=None, dropout_p=None, mc_samples=None, n_nets=None,
-                                                  density_factor=None):
+                                                  density_factor=None, save_individual=True):
     """Helper function to save normalized entropy-based summary statistics for undersampling experiments
     
     Args:
@@ -1021,6 +1408,7 @@ def save_summary_statistics_entropy_undersampling(avg_ale_entropy_list, avg_epi_
         mc_samples: Optional number of MC samples for MC Dropout (int)
         n_nets: Optional number of nets for Deep Ensemble (int)
         density_factor: Optional density factor for filename
+        save_individual: If True, save individual Excel file. If False, only return DataFrame.
     
     Returns:
         tuple: (stats_df, fig) - DataFrame with statistics and matplotlib figure
@@ -1062,8 +1450,10 @@ def save_summary_statistics_entropy_undersampling(avg_ale_entropy_list, avg_epi_
     if date:
         filename = f"{date}_{filename}"
     
-    save_statistics(stats_df, filename, 
-                    subfolder=f"undersampling/{noise_type}/{func_type}", save_excel=True)
+    # Save statistics to Excel (only if save_individual is True)
+    if save_individual:
+        save_statistics(stats_df, filename, 
+                        subfolder=f"undersampling/{noise_type}/{func_type}")
     
     # Skip plot creation - only return statistics DataFrame
     return stats_df, None
@@ -1243,4 +1633,62 @@ def save_model_outputs(mu_samples, sigma2_samples, x_grid, y_grid_clean,
     np.savez_compressed(filepath, **save_dict)
     print(f"Saved model outputs: {filepath}")
     
+    return filepath
+
+
+def save_classification_outputs(
+    outputs: dict,
+    model_name: str,
+    experiment_name: str,
+    subfolder: str = "classification",
+    date: str | None = None,
+    **kwargs
+):
+    """
+    Save classification model outputs and metadata to compressed numpy file.
+
+    outputs can include:
+      - probs_members (IT): [M, N, K]
+      - mu_members, sigma2_members (GL): [M, N, K]
+      - y_true, ood_mask, x_eval
+      - metrics dict
+    """
+    global outputs_dir
+    if outputs_dir is None:
+        current = Path.cwd()
+        project_root = current.parent if current.name == "Experiments" else current
+        outputs_dir = project_root / "results" / "classification" / "outputs"
+
+    save_dir = outputs_dir / subfolder
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    parts = []
+    if date:
+        parts.append(date)
+    parts.append(model_name)
+    parts.append(experiment_name)
+    parts.append("outputs")
+    filename = sanitize_filename("_".join(parts))
+    filepath = save_dir / f"{filename}.npz"
+
+    save_dict = {}
+    for key, value in outputs.items():
+        if value is None:
+            continue
+        save_dict[key] = np.asarray(value)
+
+    for key, value in kwargs.items():
+        if value is None:
+            continue
+        if isinstance(value, (str,)):
+            save_dict[key] = np.array([value], dtype=object)
+        elif isinstance(value, (int,)):
+            save_dict[key] = np.array([value], dtype=np.int32)
+        elif isinstance(value, (float,)):
+            save_dict[key] = np.array([value], dtype=np.float32)
+        else:
+            save_dict[key] = np.asarray(value)
+
+    np.savez_compressed(filepath, **save_dict)
+    print(f"Saved classification outputs: {filepath}")
     return filepath

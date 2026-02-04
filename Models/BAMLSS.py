@@ -459,3 +459,204 @@ def bamlss_predict(x_train, y_train, x_grid, return_raw_arrays=False, **kwargs):
     else:
         return mu_pred, ale_var, epi_var, tot_var
 
+
+def fit_bamlss_2d(x_train, z_train, y_train, x_grid, z_grid, 
+                  n_iter=12000, burnin=2000, thin=10, 
+                  nsamples=1000, k_mu=10, k_sigma=10, return_raw_arrays=False):
+    """
+    Fit Bayesian GAMLSS using bamlss package in R with 2D input (X and Z).
+    
+    Parameters:
+    -----------
+    x_train : np.ndarray, shape (n_train,)
+        First dimension of training input (X)
+    z_train : np.ndarray, shape (n_train,)
+        Second dimension of training input (Z)
+    y_train : np.ndarray, shape (n_train,)
+        Training target data
+    x_grid : np.ndarray, shape (n_grid,)
+        First dimension grid points for prediction
+    z_grid : np.ndarray, shape (n_grid,)
+        Second dimension grid points for prediction
+    n_iter, burnin, thin, nsamples, k_mu, k_sigma : int
+        MCMC and model parameters
+    return_raw_arrays : bool
+        If True, return raw (mu_samples, sigma2_samples)
+    
+    Returns:
+    --------
+    Same as fit_bamlss but for 2D input
+    """
+    _check_rpy2()
+    bamlss = _ensure_bamlss_installed()
+    
+    # Prepare data - flatten all inputs
+    x_train = np.asarray(x_train).flatten()
+    z_train = np.asarray(z_train).flatten()
+    y_train = np.asarray(y_train).flatten()
+    x_grid = np.asarray(x_grid).flatten()
+    z_grid = np.asarray(z_grid).flatten()
+    
+    n_grid = len(x_grid)
+    
+    # Convert to pandas DataFrame for R
+    train_df = pd.DataFrame({'x': x_train, 'z': z_train, 'y': y_train})
+    grid_df = pd.DataFrame({'x': x_grid, 'z': z_grid})
+    
+    # Convert to R data frames
+    with localconverter(ro.default_converter + pandas2ri.converter):
+        r_train = ro.conversion.py2rpy(train_df)
+        r_grid = ro.conversion.py2rpy(grid_df)
+    
+    ro.globalenv['r_train'] = r_train
+    ro.globalenv['r_grid'] = r_grid
+    
+    # Define formula with both x and z using tensor product smooth
+    ro.r(f'''
+    form <- list(
+      y ~ s(x, bs = "ps", k = {k_mu}) + s(z, bs = "ps", k = {k_mu}) + ti(x, z, bs = "ps", k = {min(k_mu, 5)}),
+      sigma ~ s(x, bs = "ps", k = {k_sigma}) + s(z, bs = "ps", k = {k_sigma})
+    )
+    ''')
+    
+    print(f"Fitting BAMLSS 2D model (this may take a while: {n_iter} iterations)...")
+    ro.r(f'''
+    fit <- bamlss(
+      formula = form,
+      family = "gaussian",
+      data = r_train,
+      sampler = TRUE,
+      n.iter = {n_iter},
+      burnin = {burnin},
+      thin = {thin}
+    )
+    ''')
+    
+    print(f"Extracting {nsamples} posterior samples...")
+    ro.globalenv['nsamples'] = nsamples
+    ro.globalenv['n_grid'] = n_grid
+    
+    # Use simple prediction approach - get mean predictions
+    # For 2D case, we simplify by getting point estimates
+    ro.r('''
+    mu_pred <- predict(fit, newdata = r_grid, model = "mu", type = "parameter")
+    sg_pred <- predict(fit, newdata = r_grid, model = "sigma", type = "parameter")
+    
+    # Get samples from chain for uncertainty
+    samps <- samples(fit)
+    
+    # Find chain length
+    n_chain <- 0
+    for(i in 1:length(samps)) {
+      if(!is.null(samps[[i]]) && is.matrix(samps[[i]])) {
+        n_chain <- nrow(samps[[i]])
+        break
+      }
+    }
+    
+    if(n_chain < nsamples) {
+      n_use <- n_chain
+    } else {
+      n_use <- nsamples
+    }
+    
+    idx_use <- sample(n_chain, n_use)
+    
+    # Simple approach: predict for each sample
+    mu_list <- list()
+    sg_list <- list()
+    
+    for(i in 1:n_use) {
+      idx_i <- idx_use[i]
+      fit_i <- fit
+      fit_i$samples <- lapply(samps, function(x) {
+        if(is.matrix(x) && nrow(x) >= idx_i) {
+          x[idx_i, , drop = FALSE]
+        } else {
+          x
+        }
+      })
+      
+      mu_pred_i <- predict(fit_i, newdata = r_grid, model = "mu", type = "parameter")
+      sg_pred_i <- predict(fit_i, newdata = r_grid, model = "sigma", type = "parameter")
+      
+      mu_list[[i]] <- as.numeric(mu_pred_i)
+      sg_list[[i]] <- as.numeric(sg_pred_i)
+      
+      if(i %% 100 == 0) {
+        print(paste("  Processed", i, "of", n_use, "samples"))
+      }
+    }
+    
+    mu_samps <- do.call(cbind, mu_list)
+    sg_samps <- do.call(cbind, sg_list)
+    ''')
+    
+    mu_samps = np.array(ro.r['mu_samps'])
+    sg_samps = np.array(ro.r['sg_samps'])
+    
+    # Ensure correct shape [N x S]
+    if mu_samps.ndim == 1:
+        mu_samps = mu_samps.reshape(n_grid, -1)
+    if sg_samps.ndim == 1:
+        sg_samps = sg_samps.reshape(n_grid, -1)
+    
+    if mu_samps.shape[0] != n_grid:
+        if mu_samps.shape[1] == n_grid:
+            mu_samps = mu_samps.T
+            sg_samps = sg_samps.T
+    
+    # Uncertainty decomposition
+    mu_mean = np.mean(mu_samps, axis=1)
+    ale_var = np.mean(sg_samps**2, axis=1)
+    epi_var = np.var(mu_samps, axis=1)
+    tot_var = ale_var + epi_var
+    
+    if return_raw_arrays:
+        mu_samps_T = mu_samps.T
+        sigma2_samps_T = (sg_samps ** 2).T
+        return mu_mean, ale_var, epi_var, tot_var, (mu_samps_T, sigma2_samps_T)
+    else:
+        return mu_mean, ale_var, epi_var, tot_var
+
+
+def bamlss_predict_2d(x_train, z_train, y_train, x_grid, z_grid, return_raw_arrays=False, **kwargs):
+    """
+    BAMLSS prediction with 2D input for OVB experiments.
+    
+    Parameters:
+    -----------
+    x_train : np.ndarray
+        First dimension of training input
+    z_train : np.ndarray
+        Second dimension of training input (omitted variable)
+    y_train : np.ndarray
+        Training targets
+    x_grid : np.ndarray
+        First dimension of prediction grid
+    z_grid : np.ndarray
+        Second dimension of prediction grid
+    return_raw_arrays : bool
+        If True, return raw sample arrays
+    **kwargs : dict
+        Additional arguments passed to fit_bamlss_2d
+    
+    Returns:
+    --------
+    Same as bamlss_predict
+    """
+    result = fit_bamlss_2d(x_train, z_train, y_train, x_grid, z_grid, 
+                           return_raw_arrays=return_raw_arrays, **kwargs)
+    
+    if return_raw_arrays:
+        mu_pred, ale_var, epi_var, tot_var, raw_arrays = result
+    else:
+        mu_pred, ale_var, epi_var, tot_var = result
+    
+    mu_pred = mu_pred.reshape(-1, 1)
+    
+    if return_raw_arrays:
+        return mu_pred, ale_var, epi_var, tot_var, raw_arrays
+    else:
+        return mu_pred, ale_var, epi_var, tot_var
+

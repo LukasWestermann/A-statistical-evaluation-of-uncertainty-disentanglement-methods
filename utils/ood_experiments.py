@@ -19,8 +19,72 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
 
-from utils.results_save import save_summary_statistics_ood, save_summary_statistics_entropy_ood, save_model_outputs, save_combined_statistics_excel
+from utils.results_save import save_summary_statistics_ood, save_summary_statistics_entropy_ood, save_model_outputs, save_combined_statistics_excel, save_combined_ood_excel
+from utils.dashboards import create_experiment_dashboard
 from utils.plotting import plot_uncertainties_ood, plot_uncertainties_entropy_ood, plot_uncertainties_ood_normalized, plot_uncertainties_entropy_ood_normalized, plot_entropy_lines_ood
+
+# Module-level accumulator for combined Excel files
+# Structure: {noise_type: {(model_name, func_type, region_type): {'variance': df, 'entropy': df}}}
+_accumulated_ood_stats = {}
+
+# Module-level accumulator for panel plots
+# Structure: {noise_type: {(model_name, func_type, plot_type): {region_key: plot_data}}}
+# region_key can be 'ID', 'OOD', or a tuple representing OOD range
+_accumulated_ood_plot_data = {}
+
+
+def accumulate_plot_data(
+    x_train, y_train, x_grid, y_grid_clean,
+    mu_pred, ale_var, epi_var, tot_var,
+    ale_entropy=None, epi_entropy=None, tot_entropy=None,
+    model_name='', func_type='', noise_type='heteroscedastic',
+    ood_mask=None, region_key='ID', plot_type='variance'
+):
+    """
+    Store plot data for later panel plotting instead of saving individually.
+    
+    Args:
+        x_train, y_train: Training data
+        x_grid, y_grid_clean: Grid points and clean function values
+        mu_pred: Predictive mean
+        ale_var, epi_var, tot_var: Variance-based uncertainties
+        ale_entropy, epi_entropy, tot_entropy: Entropy-based uncertainties (optional)
+        model_name: Model name
+        func_type: Function type ('linear' or 'sin')
+        noise_type: Noise type ('heteroscedastic' or 'homoscedastic')
+        ood_mask: Boolean mask indicating OOD regions (optional)
+        region_key: Key for region ('ID', 'OOD', or tuple for OOD range)
+        plot_type: 'variance', 'entropy', 'normalized_variance', 'normalized_entropy', 'entropy_lines'
+    """
+    if noise_type not in _accumulated_ood_plot_data:
+        _accumulated_ood_plot_data[noise_type] = {}
+    
+    plot_key = (model_name, func_type, plot_type)
+    if plot_key not in _accumulated_ood_plot_data[noise_type]:
+        _accumulated_ood_plot_data[noise_type][plot_key] = {}
+    
+    # Store essential arrays (ensure they're numpy arrays)
+    _accumulated_ood_plot_data[noise_type][plot_key][region_key] = {
+        'x_train': np.asarray(x_train),
+        'y_train': np.asarray(y_train),
+        'x_grid': np.asarray(x_grid),
+        'y_grid_clean': np.asarray(y_grid_clean),
+        'mu_pred': np.asarray(mu_pred).squeeze(),
+        'ale_var': np.asarray(ale_var).squeeze(),
+        'epi_var': np.asarray(epi_var).squeeze(),
+        'tot_var': np.asarray(tot_var).squeeze(),
+        'ood_mask': np.asarray(ood_mask) if ood_mask is not None else None,
+    }
+    
+    # Add entropy data if provided
+    if ale_entropy is not None:
+        _accumulated_ood_plot_data[noise_type][plot_key][region_key]['ale_entropy'] = np.asarray(ale_entropy).squeeze()
+    if epi_entropy is not None:
+        _accumulated_ood_plot_data[noise_type][plot_key][region_key]['epi_entropy'] = np.asarray(epi_entropy).squeeze()
+    if tot_entropy is not None:
+        _accumulated_ood_plot_data[noise_type][plot_key][region_key]['tot_entropy'] = np.asarray(tot_entropy).squeeze()
+
+
 from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 from utils.device import get_device_for_worker, get_num_gpus
 from utils.metrics import (
@@ -479,7 +543,7 @@ def compute_and_save_statistics_ood(
         print_line = f"{region_name:<12} {avg_ale_norm:>24.6f}  {avg_epi_norm:>24.6f}  {avg_tot_norm:>24.6f}  {correlation:>24.6f}  {mse:>15.6f} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
         print(print_line)
         
-        # Save statistics for this region
+        # Save statistics for this region (don't save individual files, accumulate for combined Excel)
         stats_df, fig = save_summary_statistics_ood(
             [avg_ale_norm], [avg_epi_norm], [avg_tot_norm], [correlation], [mse],
             function_name, noise_type=noise_type,
@@ -488,8 +552,17 @@ def compute_and_save_statistics_ood(
             nll_list=[nll_val] if nll_val is not None else None,
             crps_list=[crps_val] if crps_val is not None else None,
             spearman_aleatoric_list=[spear_ale_val] if spear_ale_val is not None else None,
-            spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None
+            spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None,
+            save_individual=False
         )
+        
+        # Accumulate statistics for combined Excel file
+        if noise_type not in _accumulated_ood_stats:
+            _accumulated_ood_stats[noise_type] = {}
+        key = (model_name, func_type, region_name)
+        if key not in _accumulated_ood_stats[noise_type]:
+            _accumulated_ood_stats[noise_type][key] = {}
+        _accumulated_ood_stats[noise_type][key]['variance'] = stats_df
         # Summary plots removed - only uncertainty plots with data points are displayed
         if fig is not None:
             plt.show()
@@ -659,7 +732,7 @@ def compute_and_save_statistics_entropy_ood(
         print_line = f"{region_name:<12} {avg_ale_entropy_norm:>24.6f}  {avg_epi_entropy_norm:>24.6f}  {avg_tot_entropy_norm:>24.6f}  {correlation:>24.6f}  {mse:>15.6f} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
         print(print_line)
         
-        # Save normalized statistics for this region
+        # Save normalized statistics for this region (accumulate for combined Excel)
         stats_df, fig = save_summary_statistics_entropy_ood(
             [avg_ale_entropy_norm], [avg_epi_entropy_norm], [avg_tot_entropy_norm], [correlation], [mse],
             function_name, noise_type=noise_type,
@@ -668,8 +741,17 @@ def compute_and_save_statistics_entropy_ood(
             nll_list=[nll_val] if nll_val is not None else None,
             crps_list=[crps_val] if crps_val is not None else None,
             spearman_aleatoric_list=[spear_ale_val] if spear_ale_val is not None else None,
-            spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None
+            spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None,
+            save_individual=False
         )
+        
+        # Accumulate statistics for combined Excel file
+        if noise_type not in _accumulated_ood_stats:
+            _accumulated_ood_stats[noise_type] = {}
+        key = (model_name, func_type, region_name)
+        if key not in _accumulated_ood_stats[noise_type]:
+            _accumulated_ood_stats[noise_type][key] = {}
+        _accumulated_ood_stats[noise_type][key]['entropy'] = stats_df
         # Summary plots removed - only uncertainty plots with data points are displayed
         if fig is not None:
             plt.show()
@@ -945,6 +1027,23 @@ def run_mc_dropout_ood_experiment(
             func_type=func_type
         )
         
+        # Accumulate plot data for panel plots (use Combined region for full view)
+        accumulate_plot_data(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var,
+            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+            model_name='MC_Dropout', func_type=func_type, noise_type=noise_type,
+            ood_mask=ood_mask, region_key='Combined', plot_type='variance'
+        )
+        accumulate_plot_data(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var,
+            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+            model_name='MC_Dropout', func_type=func_type, noise_type=noise_type,
+            ood_mask=ood_mask, region_key='Combined', plot_type='entropy'
+        )
+        print(f"  Accumulated plot data for MC_Dropout - {func_type} - {noise_type}")
+        
         # Compute and save variance-based statistics
         variance_stats_result = compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
@@ -986,14 +1085,8 @@ def run_mc_dropout_ood_experiment(
             variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
             entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
             
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_combined_df, entropy_combined_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='MC_Dropout',
-                subfolder=f"ood/{noise_type}/{func_type}",
-                date=date, dropout_p=p, mc_samples=mc_samples
-            )
+            # Statistics are accumulated in _accumulated_ood_stats
+            # Combined Excel file will be saved at the end via save_all_ood_statistics()
 
 
 def run_deep_ensemble_ood_experiment(
@@ -1241,6 +1334,22 @@ def run_deep_ensemble_ood_experiment(
             func_type=func_type
         )
         
+        # Accumulate plot data for panel plots (use Combined region for full view)
+        accumulate_plot_data(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var,
+            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+            model_name='Deep_Ensemble', func_type=func_type, noise_type=noise_type,
+            ood_mask=ood_mask, region_key='Combined', plot_type='variance'
+        )
+        accumulate_plot_data(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var,
+            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+            model_name='Deep_Ensemble', func_type=func_type, noise_type=noise_type,
+            ood_mask=ood_mask, region_key='Combined', plot_type='entropy'
+        )
+        
         # Compute and save variance-based statistics
         variance_stats_result = compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
@@ -1282,14 +1391,8 @@ def run_deep_ensemble_ood_experiment(
             variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
             entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
             
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_combined_df, entropy_combined_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='Deep_Ensemble',
-                subfolder=f"ood/{noise_type}/{func_type}",
-                date=date, n_nets=K
-            )
+            # Statistics are accumulated in _accumulated_ood_stats
+            # Combined Excel file will be saved at the end via save_all_ood_statistics()
 
 
 def run_bnn_ood_experiment(
@@ -1543,6 +1646,22 @@ def run_bnn_ood_experiment(
             func_type=func_type
         )
         
+        # Accumulate plot data for panel plots (use Combined region for full view)
+        accumulate_plot_data(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var,
+            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+            model_name='BNN', func_type=func_type, noise_type=noise_type,
+            ood_mask=ood_mask, region_key='Combined', plot_type='variance'
+        )
+        accumulate_plot_data(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var,
+            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+            model_name='BNN', func_type=func_type, noise_type=noise_type,
+            ood_mask=ood_mask, region_key='Combined', plot_type='entropy'
+        )
+        
         # Compute and save variance-based statistics
         variance_stats_result = compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
@@ -1584,14 +1703,8 @@ def run_bnn_ood_experiment(
             variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
             entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
             
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_combined_df, entropy_combined_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='BNN',
-                subfolder=f"ood/{noise_type}/{func_type}",
-                date=date
-            )
+            # Statistics are accumulated in _accumulated_ood_stats
+            # Combined Excel file will be saved at the end via save_all_ood_statistics()
 
 
 def run_bamlss_ood_experiment(
@@ -1827,6 +1940,22 @@ def run_bamlss_ood_experiment(
             func_type=func_type
         )
         
+        # Accumulate plot data for panel plots (use Combined region for full view)
+        accumulate_plot_data(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var,
+            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+            model_name='BAMLSS', func_type=func_type, noise_type=noise_type,
+            ood_mask=ood_mask, region_key='Combined', plot_type='variance'
+        )
+        accumulate_plot_data(
+            x_train, y_train, x_grid, y_grid_clean,
+            mu_pred, ale_var, epi_var, tot_var,
+            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+            model_name='BAMLSS', func_type=func_type, noise_type=noise_type,
+            ood_mask=ood_mask, region_key='Combined', plot_type='entropy'
+        )
+        
         # Compute and save variance-based statistics
         variance_stats_result = compute_and_save_statistics_ood(
             uncertainties_id, uncertainties_ood, uncertainties_combined,
@@ -1868,12 +1997,56 @@ def run_bamlss_ood_experiment(
             variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
             entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
             
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_combined_df, entropy_combined_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='BAMLSS',
-                subfolder=f"ood/{noise_type}/{func_type}",
-                date=date
-            )
+            # Statistics are accumulated in _accumulated_ood_stats
+            # Combined Excel file will be saved at the end via save_all_ood_statistics()
+
+
+def save_all_ood_statistics(noise_type='heteroscedastic', date=None):
+    """
+    Save all accumulated OOD statistics to a single combined Excel file.
+    
+    This function should be called after all model experiments are complete.
+    
+    Args:
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        date: Optional date string in YYYYMMDD format
+    """
+    if noise_type not in _accumulated_ood_stats:
+        print(f"No accumulated statistics found for noise_type={noise_type}")
+        return
+    
+    accumulated_stats = _accumulated_ood_stats[noise_type]
+    if not accumulated_stats:
+        print(f"No accumulated statistics found for noise_type={noise_type}")
+        return
+    
+    save_combined_ood_excel(
+        accumulated_stats,
+        noise_type=noise_type,
+        date=date,
+        subfolder='ood'
+    )
+    
+    # Generate dashboard
+    print(f"\n{'='*80}")
+    print("Generating OOD experiment dashboard...")
+    print(f"{'='*80}\n")
+    try:
+        create_experiment_dashboard(
+            experiment_type='ood',
+            accumulated_stats=accumulated_stats,
+            noise_type=noise_type,
+            date=date
+        )
+        print(f"\n{'='*80}")
+        print("Dashboard generation completed.")
+        print(f"{'='*80}\n")
+    except Exception as e:
+        print(f"Error generating dashboard: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Generate panel plots
+    from utils.panel_plotting import save_all_ood_panel_plots
+    save_all_ood_panel_plots(date=date, subfolder='ood')
 

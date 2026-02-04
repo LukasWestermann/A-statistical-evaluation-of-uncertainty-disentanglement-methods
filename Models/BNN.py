@@ -48,15 +48,16 @@ def forward_nn(x, W1, b1, W2, b2, W_mu, b_mu, W_rho, b_rho):
     return mu.squeeze(-1), sigma.squeeze(-1)
 
 
-def bnn_model(x, y=None, hidden_width=16, weight_scale=1.0):
+def bnn_model(x, y=None, hidden_width=16, weight_scale=1.0, input_dim=1):
     """
     Pyro BNN model with heteroscedastic noise.
     
     Args:
-        x: Input tensor [N, 1] (on CPU)
+        x: Input tensor [N, input_dim] (on CPU)
         y: Target tensor [N] or None for prediction
         hidden_width: Width of hidden layers
         weight_scale: Scale of weight priors
+        input_dim: Input dimension (1 for univariate, 2 for OVB with X and Z)
     
     Returns:
         Samples from likelihood: y ~ Normal(mu(x), sigma(x))
@@ -65,7 +66,7 @@ def bnn_model(x, y=None, hidden_width=16, weight_scale=1.0):
     H = hidden_width
 
     # Priors on weights/biases (Gaussian) - all on CPU
-    W1   = pyro.sample("W1",   dist.Normal(0, weight_scale).expand([1, H]).to_event(2))
+    W1   = pyro.sample("W1",   dist.Normal(0, weight_scale).expand([input_dim, H]).to_event(2))
     b1   = pyro.sample("b1",   dist.Normal(0, weight_scale).expand([H]).to_event(1))
     W2   = pyro.sample("W2",   dist.Normal(0, weight_scale).expand([H, H]).to_event(2))
     b2   = pyro.sample("b2",   dist.Normal(0, weight_scale).expand([H]).to_event(1))
@@ -86,12 +87,12 @@ def bnn_model(x, y=None, hidden_width=16, weight_scale=1.0):
 
 # ---------- MCMC Training ----------
 def run_nuts(x_train_t, y_train_t, hidden_width=16, weight_scale=1.0,
-             warmup=200, samples=200, chains=1, seed=None):
+             warmup=200, samples=200, chains=1, seed=None, input_dim=1):
     """
     Run NUTS MCMC to sample from posterior.
     
     Args:
-        x_train_t: Training inputs [N, 1] torch tensor (on CPU)
+        x_train_t: Training inputs [N, input_dim] torch tensor (on CPU)
         y_train_t: Training targets [N] torch tensor (on CPU)
         hidden_width: Width of hidden layers
         weight_scale: Scale of weight priors
@@ -99,6 +100,7 @@ def run_nuts(x_train_t, y_train_t, hidden_width=16, weight_scale=1.0,
         samples: Number of posterior samples
         chains: Number of chains
         seed: Random seed (optional)
+        input_dim: Input dimension (1 for univariate, 2 for OVB with X and Z)
     
     Returns:
         MCMC object with posterior samples
@@ -108,19 +110,19 @@ def run_nuts(x_train_t, y_train_t, hidden_width=16, weight_scale=1.0,
     
     nuts_kernel = NUTS(bnn_model, target_accept_prob=0.8)
     mcmc = MCMC(nuts_kernel, num_samples=samples, warmup_steps=warmup, num_chains=chains)
-    mcmc.run(x=x_train_t, y=y_train_t, hidden_width=hidden_width, weight_scale=weight_scale)
+    mcmc.run(x=x_train_t, y=y_train_t, hidden_width=hidden_width, weight_scale=weight_scale, input_dim=input_dim)
     return mcmc
 
 
 def train_bnn(x_train, y_train, hidden_width=16, weight_scale=1.0,
-              warmup=200, samples=200, chains=1, seed=None):
+              warmup=200, samples=200, chains=1, seed=None, input_dim=1):
     """
     Train BNN using MCMC.
     
     NOTE: Uses CPU for all operations due to Pyro MCMC GPU compatibility issues.
     
     Args:
-        x_train: Training inputs [N, 1] numpy array
+        x_train: Training inputs [N, input_dim] numpy array
         y_train: Training targets [N, 1] or [N] numpy array
         hidden_width: Width of hidden layers
         weight_scale: Scale of weight priors
@@ -128,6 +130,7 @@ def train_bnn(x_train, y_train, hidden_width=16, weight_scale=1.0,
         samples: Number of posterior samples
         chains: Number of chains
         seed: Random seed (optional)
+        input_dim: Input dimension (1 for univariate, 2 for OVB with X and Z)
     
     Returns:
         Trained MCMC object
@@ -142,27 +145,28 @@ def train_bnn(x_train, y_train, hidden_width=16, weight_scale=1.0,
         y_train_t = torch.from_numpy(y_train).to(cpu_device)
     
     mcmc = run_nuts(x_train_t, y_train_t, hidden_width, weight_scale, 
-                    warmup, samples, chains, seed)
+                    warmup, samples, chains, seed, input_dim)
     return mcmc
 
 
 # ---------- Prediction ----------
-def posterior_predictive(mcmc, x_new_t, hidden_width=16, weight_scale=1.0):
+def posterior_predictive(mcmc, x_new_t, hidden_width=16, weight_scale=1.0, input_dim=1):
     """
     Generate posterior predictive samples.
     
     Args:
         mcmc: Trained MCMC object
-        x_new_t: New inputs [M, 1] torch tensor (on CPU)
+        x_new_t: New inputs [M, input_dim] torch tensor (on CPU)
         hidden_width: Width of hidden layers (must match training)
         weight_scale: Scale of weight priors (must match training)
+        input_dim: Input dimension (must match training)
     
     Returns:
         Dictionary with 'mu', 'sigma', 'obs' arrays
     """
     samples = mcmc.get_samples()
     predictive = Predictive(bnn_model, posterior_samples=samples, return_sites=("mu","sigma","obs"))
-    preds = predictive(x=x_new_t, hidden_width=hidden_width, weight_scale=weight_scale)
+    preds = predictive(x=x_new_t, hidden_width=hidden_width, weight_scale=weight_scale, input_dim=input_dim)
     return {k: v.detach().cpu().numpy() for k, v in preds.items()}
 
 
@@ -212,7 +216,7 @@ def decompose_uncertainty(mu_samples, sigma_samples):
     return mu_mean, aleatoric_var, epistemic_var, total_var
 
 
-def bnn_predict(mcmc, x, hidden_width=16, weight_scale=1.0, return_raw_arrays=False):
+def bnn_predict(mcmc, x, hidden_width=16, weight_scale=1.0, return_raw_arrays=False, input_dim=1):
     """
     Make predictions with uncertainty decomposition.
     
@@ -220,10 +224,11 @@ def bnn_predict(mcmc, x, hidden_width=16, weight_scale=1.0, return_raw_arrays=Fa
     
     Args:
         mcmc: Trained MCMC object
-        x: Input array [N, 1] numpy array
+        x: Input array [N, input_dim] numpy array
         hidden_width: Width of hidden layers (must match training)
         weight_scale: Scale of weight priors (must match training)
         return_raw_arrays: If True, also return raw (mu_samples, sigma_samples) arrays
+        input_dim: Input dimension (must match training)
     
     Returns:
         mu_pred: Predictive mean [N]
@@ -234,7 +239,7 @@ def bnn_predict(mcmc, x, hidden_width=16, weight_scale=1.0, return_raw_arrays=Fa
     """
     # Use CPU for prediction (since MCMC was on CPU)
     x_t = torch.from_numpy(x).to(cpu_device)
-    preds = posterior_predictive(mcmc, x_t, hidden_width, weight_scale)
+    preds = posterior_predictive(mcmc, x_t, hidden_width, weight_scale, input_dim)
     
     mu_samps = preds["mu"]       # [S, N] or [S, 1, N]
     sigma_samps = preds["sigma"] # [S, N] or [S, 1, N]

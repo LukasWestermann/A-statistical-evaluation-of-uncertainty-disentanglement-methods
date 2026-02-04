@@ -19,7 +19,76 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
 
-from utils.results_save import save_summary_statistics_undersampling, save_model_outputs, save_combined_statistics_excel
+from utils.results_save import save_summary_statistics_undersampling, save_model_outputs, save_combined_statistics_excel, save_combined_undersampling_excel
+from utils.dashboards import create_experiment_dashboard
+
+# Module-level accumulator for combined Excel files
+# Structure: {noise_type: {(model_name, func_type, region_name): {'variance': df, 'entropy': df}}}
+_accumulated_undersampling_stats = {}
+
+# Module-level accumulator for panel plots
+# Structure: {noise_type: {(model_name, func_type, plot_type): {region_key: plot_data}}}
+# region_key is a tuple (region_tuple, density_factor) or region name
+_accumulated_undersampling_plot_data = {}
+
+
+def accumulate_plot_data(
+    x_train, y_train, x_grid, y_grid_clean,
+    mu_pred, ale_var, epi_var, tot_var,
+    ale_entropy=None, epi_entropy=None, tot_entropy=None,
+    model_name='', func_type='', noise_type='heteroscedastic',
+    region_masks=None, sampling_regions=None, region_key=None, plot_type='variance'
+):
+    """
+    Store plot data for later panel plotting instead of saving individually.
+    
+    Args:
+        x_train, y_train: Training data
+        x_grid, y_grid_clean: Grid points and clean function values
+        mu_pred: Predictive mean
+        ale_var, epi_var, tot_var: Variance-based uncertainties
+        ale_entropy, epi_entropy, tot_entropy: Entropy-based uncertainties (optional)
+        model_name: Model name
+        func_type: Function type ('linear' or 'sin')
+        noise_type: Noise type ('heteroscedastic' or 'homoscedastic')
+        region_masks: List of boolean masks for regions (optional)
+        sampling_regions: List of tuples (region_tuple, density_factor) (optional)
+        region_key: Key for region (tuple or string)
+        plot_type: 'variance', 'entropy', 'normalized_variance', 'normalized_entropy', 'entropy_lines'
+    """
+    if region_key is None:
+        return  # Skip if region_key not provided
+    
+    if noise_type not in _accumulated_undersampling_plot_data:
+        _accumulated_undersampling_plot_data[noise_type] = {}
+    
+    plot_key = (model_name, func_type, plot_type)
+    if plot_key not in _accumulated_undersampling_plot_data[noise_type]:
+        _accumulated_undersampling_plot_data[noise_type][plot_key] = {}
+    
+    # Store essential arrays (ensure they're numpy arrays)
+    _accumulated_undersampling_plot_data[noise_type][plot_key][region_key] = {
+        'x_train': np.asarray(x_train),
+        'y_train': np.asarray(y_train),
+        'x_grid': np.asarray(x_grid),
+        'y_grid_clean': np.asarray(y_grid_clean),
+        'mu_pred': np.asarray(mu_pred).squeeze(),
+        'ale_var': np.asarray(ale_var).squeeze(),
+        'epi_var': np.asarray(epi_var).squeeze(),
+        'tot_var': np.asarray(tot_var).squeeze(),
+        'region_masks': [np.asarray(m) for m in region_masks] if region_masks is not None else None,
+        'sampling_regions': sampling_regions,
+    }
+    
+    # Add entropy data if provided
+    if ale_entropy is not None:
+        _accumulated_undersampling_plot_data[noise_type][plot_key][region_key]['ale_entropy'] = np.asarray(ale_entropy).squeeze()
+    if epi_entropy is not None:
+        _accumulated_undersampling_plot_data[noise_type][plot_key][region_key]['epi_entropy'] = np.asarray(epi_entropy).squeeze()
+    if tot_entropy is not None:
+        _accumulated_undersampling_plot_data[noise_type][plot_key][region_key]['tot_entropy'] = np.asarray(tot_entropy).squeeze()
+
+
 from utils.plotting import (
     plot_uncertainties_undersampling,
     plot_entropy_lines_undersampling
@@ -488,7 +557,7 @@ def compute_and_save_statistics_undersampling(
         print_line = f"{region_name:<15} {density_factor:<12.2f} {avg_ale_norm:>19.6f}  {avg_epi_norm:>19.6f}  {avg_tot_norm:>19.6f}  {correlation:>14.6f}  {mse:>14.6f} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
         print(print_line)
         
-        # Save statistics for this region
+        # Save statistics for this region (don't save individual files, accumulate for combined Excel)
         stats_df, fig = save_summary_statistics_undersampling(
             [avg_ale_norm], [avg_epi_norm], [avg_tot_norm], [correlation], [mse],
             function_name, noise_type=noise_type,
@@ -498,8 +567,17 @@ def compute_and_save_statistics_undersampling(
             nll_list=[nll_val] if nll_val is not None else None,
             crps_list=[crps_val] if crps_val is not None else None,
             spearman_aleatoric_list=[spear_ale_val] if spear_ale_val is not None else None,
-            spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None
+            spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None,
+            save_individual=False
         )
+        
+        # Accumulate statistics for combined Excel file
+        if noise_type not in _accumulated_undersampling_stats:
+            _accumulated_undersampling_stats[noise_type] = {}
+        key = (model_name, func_type, region_name)
+        if key not in _accumulated_undersampling_stats[noise_type]:
+            _accumulated_undersampling_stats[noise_type][key] = {}
+        _accumulated_undersampling_stats[noise_type][key]['variance'] = stats_df
         
         results[region_name.lower()] = {
             'avg_ale_norm': avg_ale_norm,
@@ -563,15 +641,24 @@ def compute_and_save_statistics_undersampling(
         print(f"{'Undersampled':<20} {avg_undersampled_ale:>19.6f}  {avg_undersampled_epi:>19.6f}  {avg_undersampled_tot:>19.6f}  {corr_undersampled:>14.6f}  {undersampled_mse:>14.6f}")
         print(f"{'Well-sampled':<20} {avg_well_sampled_ale:>19.6f}  {avg_well_sampled_epi:>19.6f}  {avg_well_sampled_tot:>19.6f}  {corr_well_sampled:>14.6f}  {well_sampled_mse:>14.6f}")
         
-        # Save comparison statistics
+        # Save comparison statistics (accumulate for combined Excel)
         for region_name, stats in [('Undersampled', (avg_undersampled_ale, avg_undersampled_epi, avg_undersampled_tot, corr_undersampled, undersampled_mse)),
                                    ('Well_sampled', (avg_well_sampled_ale, avg_well_sampled_epi, avg_well_sampled_tot, corr_well_sampled, well_sampled_mse))]:
             stats_df, fig = save_summary_statistics_undersampling(
                 [stats[0]], [stats[1]], [stats[2]], [stats[3]], [stats[4]],
                 function_name, noise_type=noise_type,
                 func_type=func_type, model_name=model_name, region_name=region_name,
-                date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+                date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
+                save_individual=False
             )
+            
+            # Accumulate statistics
+            if noise_type not in _accumulated_undersampling_stats:
+                _accumulated_undersampling_stats[noise_type] = {}
+            key = (model_name, func_type, region_name)
+            if key not in _accumulated_undersampling_stats[noise_type]:
+                _accumulated_undersampling_stats[noise_type][key] = {}
+            _accumulated_undersampling_stats[noise_type][key]['variance'] = stats_df
     
     # Compute overall statistics (across all regions combined)
     all_ale_combined = np.concatenate([unc['ale'] for unc in uncertainties_by_region])
@@ -598,13 +685,22 @@ def compute_and_save_statistics_undersampling(
     print("-" * 140)
     print(f"{'Overall':<15} {avg_ale_overall:>19.6f}  {avg_epi_overall:>19.6f}  {avg_tot_overall:>19.6f}  {corr_overall:>14.6f}  {overall_mse:>14.6f}")
     
-    # Save overall statistics
+    # Save overall statistics (accumulate for combined Excel)
     stats_df, fig = save_summary_statistics_undersampling(
         [avg_ale_overall], [avg_epi_overall], [avg_tot_overall], [corr_overall], [overall_mse],
         function_name, noise_type=noise_type,
         func_type=func_type, model_name=model_name, region_name='Overall',
-        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
+        save_individual=False
     )
+    
+    # Accumulate statistics
+    if noise_type not in _accumulated_undersampling_stats:
+        _accumulated_undersampling_stats[noise_type] = {}
+    key = (model_name, func_type, 'Overall')
+    if key not in _accumulated_undersampling_stats[noise_type]:
+        _accumulated_undersampling_stats[noise_type][key] = {}
+    _accumulated_undersampling_stats[noise_type][key]['variance'] = stats_df
     
     results['overall'] = {
         'avg_ale_norm': avg_ale_overall,
@@ -721,14 +817,23 @@ def compute_and_save_statistics_entropy_undersampling(
         
         print(f"{region_name:<15} {density_factor:<12.2f} {avg_ale_entropy_norm:>19.6f}  {avg_epi_entropy_norm:>19.6f}  {avg_tot_entropy_norm:>19.6f}  {correlation:>14.6f}  {mse:>14.6f}")
         
-        # Save normalized statistics for this region
+        # Save normalized statistics for this region (accumulate for combined Excel)
         stats_df, fig = save_summary_statistics_entropy_undersampling(
             [avg_ale_entropy_norm], [avg_epi_entropy_norm], [avg_tot_entropy_norm], [correlation], [mse],
             function_name, noise_type=noise_type,
             func_type=func_type, model_name=model_name, region_name=region_name,
             date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
-            density_factor=density_factor
+            density_factor=density_factor,
+            save_individual=False
         )
+        
+        # Accumulate statistics for combined Excel file
+        if noise_type not in _accumulated_undersampling_stats:
+            _accumulated_undersampling_stats[noise_type] = {}
+        key = (model_name, func_type, region_name)
+        if key not in _accumulated_undersampling_stats[noise_type]:
+            _accumulated_undersampling_stats[noise_type][key] = {}
+        _accumulated_undersampling_stats[noise_type][key]['entropy'] = stats_df
         
         results[region_name.lower()] = {
             'avg_ale_norm': avg_ale_entropy_norm,
@@ -790,15 +895,24 @@ def compute_and_save_statistics_entropy_undersampling(
         print(f"{'Undersampled':<20} {avg_undersampled_ale:>19.6f}  {avg_undersampled_epi:>19.6f}  {avg_undersampled_tot:>19.6f}  {corr_undersampled:>14.6f}  {undersampled_mse:>14.6f}")
         print(f"{'Well-sampled':<20} {avg_well_sampled_ale:>19.6f}  {avg_well_sampled_epi:>19.6f}  {avg_well_sampled_tot:>19.6f}  {corr_well_sampled:>14.6f}  {well_sampled_mse:>14.6f}")
         
-        # Save comparison statistics
+        # Save comparison statistics (accumulate for combined Excel)
         for region_name, stats in [('Undersampled', (avg_undersampled_ale, avg_undersampled_epi, avg_undersampled_tot, corr_undersampled, undersampled_mse)),
                                    ('Well_sampled', (avg_well_sampled_ale, avg_well_sampled_epi, avg_well_sampled_tot, corr_well_sampled, well_sampled_mse))]:
             stats_df, fig = save_summary_statistics_entropy_undersampling(
                 [stats[0]], [stats[1]], [stats[2]], [stats[3]], [stats[4]],
                 function_name, noise_type=noise_type,
                 func_type=func_type, model_name=model_name, region_name=region_name,
-                date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+                date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
+                save_individual=False
             )
+            
+            # Accumulate statistics
+            if noise_type not in _accumulated_undersampling_stats:
+                _accumulated_undersampling_stats[noise_type] = {}
+            key = (model_name, func_type, region_name)
+            if key not in _accumulated_undersampling_stats[noise_type]:
+                _accumulated_undersampling_stats[noise_type][key] = {}
+            _accumulated_undersampling_stats[noise_type][key]['entropy'] = stats_df
     
     # Compute overall statistics (across all regions combined)
     all_ale_combined = np.concatenate([unc['ale'] for unc in uncertainties_entropy_by_region])
@@ -826,13 +940,22 @@ def compute_and_save_statistics_entropy_undersampling(
     print("-" * 140)
     print(f"{'Overall':<15} {avg_ale_overall:>19.6f}  {avg_epi_overall:>19.6f}  {avg_tot_overall:>19.6f}  {corr_overall:>14.6f}  {overall_mse:>14.6f}")
     
-    # Save overall statistics
+    # Save overall statistics (accumulate for combined Excel)
     stats_df, fig = save_summary_statistics_entropy_undersampling(
         [avg_ale_overall], [avg_epi_overall], [avg_tot_overall], [corr_overall], [overall_mse],
         function_name, noise_type=noise_type,
         func_type=func_type, model_name=model_name, region_name='Overall',
-        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
+        save_individual=False
     )
+    
+    # Accumulate statistics
+    if noise_type not in _accumulated_undersampling_stats:
+        _accumulated_undersampling_stats[noise_type] = {}
+    key = (model_name, func_type, 'Overall')
+    if key not in _accumulated_undersampling_stats[noise_type]:
+        _accumulated_undersampling_stats[noise_type][key] = {}
+    _accumulated_undersampling_stats[noise_type][key]['entropy'] = stats_df
     
     results['overall'] = {
         'avg_ale_norm': avg_ale_overall,
@@ -1105,18 +1228,8 @@ def run_mc_dropout_undersampling_experiment(
                     df.insert(0, 'Region', key.capitalize())
                 entropy_dfs.append(df)
         
-        if variance_dfs and entropy_dfs:
-            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
-            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
-            
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_combined_df, entropy_combined_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='MC_Dropout',
-                subfolder=f"undersampling/{noise_type}/{func_type}",
-                date=date, dropout_p=p, mc_samples=mc_samples
-            )
+        # Statistics are accumulated in _accumulated_undersampling_stats
+        # Combined Excel file will be saved at the end via save_all_undersampling_statistics()
 
 
 def run_deep_ensemble_undersampling_experiment(
@@ -1234,10 +1347,20 @@ def run_deep_ensemble_undersampling_experiment(
         epi_entropy = entropy_results['epistemic']
         tot_entropy = entropy_results['total']
         
+        # Compute predictive aggregation (mu*, sigma*^2)
+        mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        
+        # Compute true noise variance for grid points
+        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+        
         # Split uncertainties by region
         uncertainties_by_region = []
         uncertainties_entropy_by_region = []
         mse_by_region = []
+        nll_by_region = []
+        crps_by_region = []
+        spearman_aleatoric_by_region = []
+        spearman_epistemic_by_region = []
         
         mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
         y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
@@ -1257,9 +1380,27 @@ def run_deep_ensemble_undersampling_experiment(
             
             if np.any(mask):
                 mse = np.mean((mu_pred_flat[mask] - y_grid_clean_flat[mask])**2)
+                
+                # Compute NLL, CRPS, and disentanglement metrics for this region
+                nll = compute_gaussian_nll(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                crps = compute_crps_gaussian(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                disentangle = compute_uncertainty_disentanglement(
+                    y_grid_clean_flat[mask], mu_star[mask],
+                    ale_var[mask] if ale_var.ndim == 1 else ale_var[mask].flatten(),
+                    epi_var[mask] if epi_var.ndim == 1 else epi_var[mask].flatten(),
+                    true_noise_var[mask]
+                )
             else:
                 mse = 0.0
+                nll = 0.0
+                crps = 0.0
+                disentangle = {'spearman_aleatoric': 0.0, 'spearman_epistemic': 0.0}
+            
             mse_by_region.append(mse)
+            nll_by_region.append(nll)
+            crps_by_region.append(crps)
+            spearman_aleatoric_by_region.append(disentangle['spearman_aleatoric'])
+            spearman_epistemic_by_region.append(disentangle['spearman_epistemic'])
         
         # Save raw model outputs
         save_model_outputs(
@@ -1338,18 +1479,8 @@ def run_deep_ensemble_undersampling_experiment(
                     df.insert(0, 'Region', key.capitalize())
                 entropy_dfs.append(df)
         
-        if variance_dfs and entropy_dfs:
-            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
-            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
-            
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_combined_df, entropy_combined_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='Deep_Ensemble',
-                subfolder=f"undersampling/{noise_type}/{func_type}",
-                date=date, n_nets=K
-            )
+        # Statistics are accumulated in _accumulated_undersampling_stats
+        # Combined Excel file will be saved at the end via save_all_undersampling_statistics()
 
 
 def run_bnn_undersampling_experiment(
@@ -1605,18 +1736,8 @@ def run_bnn_undersampling_experiment(
                     df.insert(0, 'Region', key.capitalize())
                 entropy_dfs.append(df)
         
-        if variance_dfs and entropy_dfs:
-            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
-            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
-            
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_combined_df, entropy_combined_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='BNN',
-                subfolder=f"undersampling/{noise_type}/{func_type}",
-                date=date
-            )
+        # Statistics are accumulated in _accumulated_undersampling_stats
+        # Combined Excel file will be saved at the end via save_all_undersampling_statistics()
 
 
 def run_bamlss_undersampling_experiment(
@@ -1838,32 +1959,55 @@ def run_bamlss_undersampling_experiment(
             date=date
         )
         
-        # Combine DataFrames from all regions
-        variance_dfs = []
-        entropy_dfs = []
-        for key in variance_stats_result.keys():
-            if 'stats_df' in variance_stats_result[key]:
-                df = variance_stats_result[key]['stats_df'].copy()
-                if 'Region' not in df.columns:
-                    df.insert(0, 'Region', key.capitalize())
-                variance_dfs.append(df)
-        for key in entropy_stats_result.keys():
-            if 'stats_df' in entropy_stats_result[key]:
-                df = entropy_stats_result[key]['stats_df'].copy()
-                if 'Region' not in df.columns:
-                    df.insert(0, 'Region', key.capitalize())
-                entropy_dfs.append(df)
-        
-        if variance_dfs and entropy_dfs:
-            variance_combined_df = pd.concat(variance_dfs, ignore_index=True)
-            entropy_combined_df = pd.concat(entropy_dfs, ignore_index=True)
-            
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_combined_df, entropy_combined_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='BAMLSS',
-                subfolder=f"undersampling/{noise_type}/{func_type}",
-                date=date
-            )
+        # Statistics are accumulated in _accumulated_undersampling_stats
+        # Combined Excel file will be saved at the end via save_all_undersampling_statistics()
 
+
+def save_all_undersampling_statistics(noise_type='heteroscedastic', date=None):
+    """
+    Save all accumulated undersampling statistics to a single combined Excel file.
+    
+    This function should be called after all model experiments are complete.
+    
+    Args:
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        date: Optional date string in YYYYMMDD format
+    """
+    if noise_type not in _accumulated_undersampling_stats:
+        print(f"No accumulated statistics found for noise_type={noise_type}")
+        return
+    
+    accumulated_stats = _accumulated_undersampling_stats[noise_type]
+    if not accumulated_stats:
+        print(f"No accumulated statistics found for noise_type={noise_type}")
+        return
+    
+    save_combined_undersampling_excel(
+        accumulated_stats,
+        noise_type=noise_type,
+        date=date,
+        subfolder='undersampling'
+    )
+    
+    # Generate dashboard
+    print(f"\n{'='*80}")
+    print("Generating undersampling experiment dashboard...")
+    print(f"{'='*80}\n")
+    try:
+        create_experiment_dashboard(
+            experiment_type='undersampling',
+            accumulated_stats=accumulated_stats,
+            noise_type=noise_type,
+            date=date
+        )
+        print(f"\n{'='*80}")
+        print("Dashboard generation completed.")
+        print(f"{'='*80}\n")
+    except Exception as e:
+        print(f"Error generating dashboard: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Generate panel plots
+    from utils.panel_plotting import save_all_undersampling_panel_plots
+    save_all_undersampling_panel_plots(date=date, subfolder='undersampling')

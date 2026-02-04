@@ -172,7 +172,7 @@ def plot_data_with_ood_regions(x_train, y_train, x_grid, y_grid_clean, train_ran
 
 
 # Simplified plotting function without OOD
-def plot_uncertainties_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, title, noise_type='heteroscedastic', func_type=''):
+def plot_uncertainties_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, title, noise_type='heteroscedastic', func_type='', save_individual=True):
     fig, axes = plt.subplots(3, 1, figsize=(12, 16), sharex=True)
     x = x_grid[:, 0]
     
@@ -217,14 +217,15 @@ def plot_uncertainties_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, m
     plt.tight_layout()
     
     # Save plot with organized folder structure: uncertainties/{noise_type}/{func_type}/
-    subfolder = f"uncertainties/{noise_type}/{func_type}" if func_type else f"uncertainties/{noise_type}"
-    save_plot(fig, title, subfolder=subfolder)
+    if save_individual:
+        subfolder = f"uncertainties/{noise_type}/{func_type}" if func_type else f"uncertainties/{noise_type}"
+        save_plot(fig, title, subfolder=subfolder)
     
     plt.show()
     plt.close(fig)
 
 
-def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, ood_mask, title, noise_type='heteroscedastic', func_type=''):
+def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, ood_mask, title, noise_type='heteroscedastic', func_type='', save_individual=True):
     """Plot uncertainties with OOD regions highlighted
     
     Args:
@@ -365,16 +366,17 @@ def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, 
 
     plt.tight_layout()
     
-    # Save plot with organized folder structure: uncertainties_ood/{noise_type}/{func_type}/
-    subfolder = f"uncertainties_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_ood/{noise_type}"
-    save_plot(fig, title, subfolder=subfolder)
+    if save_individual:
+        # Save plot with organized folder structure: uncertainties_ood/{noise_type}/{func_type}/
+        subfolder = f"uncertainties_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_ood/{noise_type}"
+        save_plot(fig, title, subfolder=subfolder)
     
     plt.show()
     plt.close(fig)
 
 
 def plot_uncertainties_undersampling(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, 
-                                    region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type=''):
+                                    region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type='', save_individual=True):
     """Plot uncertainties with different sampling regions highlighted
     
     Args:
@@ -523,9 +525,10 @@ def plot_uncertainties_undersampling(x_train, y_train, x_grid, y_clean, mu_pred,
 
     plt.tight_layout()
     
-    # Save plot with organized folder structure: uncertainties_undersampling/{noise_type}/{func_type}/
-    subfolder = f"uncertainties_undersampling/{noise_type}/{func_type}" if func_type else f"uncertainties_undersampling/{noise_type}"
-    save_plot(fig, title, subfolder=subfolder)
+    if save_individual:
+        # Save plot with organized folder structure: uncertainties_undersampling/{noise_type}/{func_type}/
+        subfolder = f"uncertainties_undersampling/{noise_type}/{func_type}" if func_type else f"uncertainties_undersampling/{noise_type}"
+        save_plot(fig, title, subfolder=subfolder)
     
     plt.show()
     plt.close(fig)
@@ -766,7 +769,7 @@ def analyze_uncertainties_by_region(x_values, ale_var, epi_var, tot_var, mu_pred
 
 # ========== Entropy-Based Plotting Functions ==========
 
-def plot_uncertainties_entropy_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, title, noise_type='heteroscedastic', func_type=''):
+def plot_uncertainties_entropy_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, title, noise_type='heteroscedastic', func_type='', save_individual=True):
     """Plot entropy-based uncertainties without OOD regions
     
     Args:
@@ -781,6 +784,7 @@ def plot_uncertainties_entropy_no_ood(x_train_subset, y_train_subset, x_grid, y_
         title: Plot title
         noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
         func_type: Function type identifier (e.g., 'linear', 'sin')
+        save_individual: If True, save individual plot file. If False, only display.
     """
     fig, axes = plt.subplots(4, 1, figsize=(12, 18), sharex=True)
     x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
@@ -848,14 +852,15 @@ def plot_uncertainties_entropy_no_ood(x_train_subset, y_train_subset, x_grid, y_
     plt.tight_layout()
     
     # Save plot with organized folder structure: uncertainties_entropy/{noise_type}/{func_type}/
-    subfolder = f"uncertainties_entropy/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy/{noise_type}"
-    save_plot(fig, f"{title}_entropy", subfolder=subfolder)
+    if save_individual:
+        subfolder = f"uncertainties_entropy/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy/{noise_type}"
+        save_plot(fig, f"{title}_entropy", subfolder=subfolder)
     
     plt.show()
     plt.close(fig)
 
 
-def plot_uncertainties_entropy_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask, title, noise_type='heteroscedastic', func_type=''):
+def plot_uncertainties_entropy_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask, title, noise_type='heteroscedastic', func_type='', save_individual=True):
     """Plot entropy-based uncertainties with OOD regions highlighted
     
     Args:
@@ -1003,9 +1008,10 @@ def plot_uncertainties_entropy_ood(x_train, y_train, x_grid, y_clean, mu_pred, a
     
     plt.tight_layout()
     
-    # Save plot with organized folder structure: uncertainties_entropy_ood/{noise_type}/{func_type}/
-    subfolder = f"uncertainties_entropy_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_ood/{noise_type}"
-    save_plot(fig, f"{title}_entropy", subfolder=subfolder)
+    if save_individual:
+        # Save plot with organized folder structure: uncertainties_entropy_ood/{noise_type}/{func_type}/
+        subfolder = f"uncertainties_entropy_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_ood/{noise_type}"
+        save_plot(fig, f"{title}_entropy", subfolder=subfolder)
     
     plt.show()
     plt.close(fig)
@@ -1023,7 +1029,7 @@ def _normalize_values(values, vmin=None, vmax=None):
     return (values - vmin) / (vmax - vmin)
 
 
-def plot_uncertainties_ood_normalized(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, ood_mask, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3):
+def plot_uncertainties_ood_normalized(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, ood_mask, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3, save_individual=True):
     """Plot normalized variance-based uncertainties with OOD regions highlighted
     
     Args:
@@ -1174,15 +1180,16 @@ def plot_uncertainties_ood_normalized(x_train, y_train, x_grid, y_clean, mu_pred
     
     plt.tight_layout()
     
-    # Save plot with organized folder structure
-    subfolder = f"uncertainties_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_ood/{noise_type}"
-    save_plot(fig, f"{title}_normalized", subfolder=subfolder)
+    if save_individual:
+        # Save plot with organized folder structure
+        subfolder = f"uncertainties_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_ood/{noise_type}"
+        save_plot(fig, f"{title}_normalized", subfolder=subfolder)
     
     plt.show()
     plt.close(fig)
 
 
-def plot_uncertainties_entropy_ood_normalized(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3):
+def plot_uncertainties_entropy_ood_normalized(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3, save_individual=True):
     """Plot normalized entropy-based uncertainties with OOD regions highlighted
     
     Args:
@@ -1329,15 +1336,16 @@ def plot_uncertainties_entropy_ood_normalized(x_train, y_train, x_grid, y_clean,
     
     plt.tight_layout()
     
-    # Save plot with organized folder structure
-    subfolder = f"uncertainties_entropy_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_ood/{noise_type}"
-    save_plot(fig, f"{title}_entropy_normalized", subfolder=subfolder)
+    if save_individual:
+        # Save plot with organized folder structure
+        subfolder = f"uncertainties_entropy_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_ood/{noise_type}"
+        save_plot(fig, f"{title}_entropy_normalized", subfolder=subfolder)
     
     plt.show()
     plt.close(fig)
 
 
-def plot_entropy_lines_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask, title, noise_type='heteroscedastic', func_type=''):
+def plot_entropy_lines_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask, title, noise_type='heteroscedastic', func_type='', save_individual=True):
     """Plot entropy values directly as line plots (in nats) with OOD regions highlighted
     
     Shows entropy values on y-axis, separate from predictive mean.
@@ -1480,15 +1488,16 @@ def plot_entropy_lines_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_entro
     
     plt.tight_layout()
     
-    # Save plot with organized folder structure
-    subfolder = f"uncertainties_entropy_lines_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_lines_ood/{noise_type}"
-    save_plot(fig, f"{title}_entropy_lines", subfolder=subfolder)
+    if save_individual:
+        # Save plot with organized folder structure
+        subfolder = f"uncertainties_entropy_lines_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_lines_ood/{noise_type}"
+        save_plot(fig, f"{title}_entropy_lines", subfolder=subfolder)
     
     plt.show()
     plt.close(fig)
 
 
-def plot_entropy_lines_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, title, noise_type='heteroscedastic', func_type=''):
+def plot_entropy_lines_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, title, noise_type='heteroscedastic', func_type='', save_individual=True):
     """Plot entropy values directly as line plots (in nats) without OOD regions
     
     Shows entropy values on y-axis, separate from predictive mean.
@@ -1506,6 +1515,7 @@ def plot_entropy_lines_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, m
         title: Plot title
         noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
         func_type: Function type identifier (e.g., 'linear', 'sin')
+        save_individual: If True, save individual plot file. If False, only display.
     """
     fig, axes = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
     x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
@@ -1593,8 +1603,9 @@ def plot_entropy_lines_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, m
     plt.tight_layout()
     
     # Save plot with organized folder structure
-    subfolder = f"uncertainties_entropy_lines_no_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_lines_no_ood/{noise_type}"
-    save_plot(fig, f"{title}_entropy_lines", subfolder=subfolder)
+    if save_individual:
+        subfolder = f"uncertainties_entropy_lines_no_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_lines_no_ood/{noise_type}"
+        save_plot(fig, f"{title}_entropy_lines", subfolder=subfolder)
     
     # Display plot in notebook
     if _ipython_available:
@@ -1603,7 +1614,7 @@ def plot_entropy_lines_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, m
     plt.close(fig)
 
 
-def plot_uncertainties_no_ood_normalized(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3):
+def plot_uncertainties_no_ood_normalized(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3, save_individual=True):
     """Plot normalized variance-based uncertainties without OOD regions
     
     Args:
@@ -1619,6 +1630,7 @@ def plot_uncertainties_no_ood_normalized(x_train_subset, y_train_subset, x_grid,
         noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
         func_type: Function type identifier (e.g., 'linear', 'sin')
         scale_factor: Scaling factor for normalized bands (default 0.3)
+        save_individual: If True, save individual plot file. If False, only display.
     """
     fig, axes = plt.subplots(3, 1, figsize=(12, 16), sharex=True)
     x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
@@ -1707,8 +1719,9 @@ def plot_uncertainties_no_ood_normalized(x_train_subset, y_train_subset, x_grid,
     plt.tight_layout()
     
     # Save plot with organized folder structure
-    subfolder = f"uncertainties_no_ood_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_no_ood_normalized/{noise_type}"
-    save_plot(fig, f"{title}_normalized", subfolder=subfolder)
+    if save_individual:
+        subfolder = f"uncertainties_no_ood_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_no_ood_normalized/{noise_type}"
+        save_plot(fig, f"{title}_normalized", subfolder=subfolder)
     
     # Display plot in notebook
     if _ipython_available:
@@ -1717,7 +1730,7 @@ def plot_uncertainties_no_ood_normalized(x_train_subset, y_train_subset, x_grid,
     plt.close(fig)
 
 
-def plot_uncertainties_entropy_no_ood_normalized(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3):
+def plot_uncertainties_entropy_no_ood_normalized(x_train_subset, y_train_subset, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3, save_individual=True):
     """Plot normalized entropy-based uncertainties without OOD regions
     
     Args:
@@ -1733,6 +1746,7 @@ def plot_uncertainties_entropy_no_ood_normalized(x_train_subset, y_train_subset,
         noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
         func_type: Function type identifier (e.g., 'linear', 'sin')
         scale_factor: Scaling factor for normalized bands (default 0.3)
+        save_individual: If True, save individual plot file. If False, only display.
     """
     fig, axes = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
     x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
@@ -1817,8 +1831,9 @@ def plot_uncertainties_entropy_no_ood_normalized(x_train_subset, y_train_subset,
     plt.tight_layout()
     
     # Save plot with organized folder structure
-    subfolder = f"uncertainties_entropy_no_ood_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_no_ood_normalized/{noise_type}"
-    save_plot(fig, f"{title}_entropy_normalized", subfolder=subfolder)
+    if save_individual:
+        subfolder = f"uncertainties_entropy_no_ood_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_no_ood_normalized/{noise_type}"
+        save_plot(fig, f"{title}_entropy_normalized", subfolder=subfolder)
     
     # Display plot in notebook
     if _ipython_available:
@@ -1828,7 +1843,7 @@ def plot_uncertainties_entropy_no_ood_normalized(x_train_subset, y_train_subset,
 
 
 def plot_uncertainties_entropy_undersampling(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy,
-                                            region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type=''):
+                                            region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type='', save_individual=True):
     """Plot entropy-based uncertainties with different sampling regions highlighted
     
     Args:
@@ -1984,9 +1999,10 @@ def plot_uncertainties_entropy_undersampling(x_train, y_train, x_grid, y_clean, 
     
     plt.tight_layout()
     
-    # Save plot with organized folder structure: uncertainties_entropy_undersampling/{noise_type}/{func_type}/
-    subfolder = f"uncertainties_entropy_undersampling/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_undersampling/{noise_type}"
-    save_plot(fig, f"{title}_entropy", subfolder=subfolder)
+    if save_individual:
+        # Save plot with organized folder structure: uncertainties_entropy_undersampling/{noise_type}/{func_type}/
+        subfolder = f"uncertainties_entropy_undersampling/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_undersampling/{noise_type}"
+        save_plot(fig, f"{title}_entropy", subfolder=subfolder)
     
     # Display plot in notebook
     if _ipython_available:
@@ -1996,7 +2012,7 @@ def plot_uncertainties_entropy_undersampling(x_train, y_train, x_grid, y_clean, 
 
 
 def plot_entropy_lines_undersampling(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy,
-                                     region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type=''):
+                                     region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type='', save_individual=True):
     """Plot entropy values directly as line plots (in nats) with undersampling regions highlighted
     
     Shows entropy values on y-axis, separate from predictive mean.
@@ -2154,9 +2170,10 @@ def plot_entropy_lines_undersampling(x_train, y_train, x_grid, y_clean, mu_pred,
     
     plt.tight_layout()
     
-    # Save plot with organized folder structure
-    subfolder = f"uncertainties_entropy_lines_undersampling/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_lines_undersampling/{noise_type}"
-    save_plot(fig, f"{title}_entropy_lines", subfolder=subfolder)
+    if save_individual:
+        # Save plot with organized folder structure
+        subfolder = f"uncertainties_entropy_lines_undersampling/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_lines_undersampling/{noise_type}"
+        save_plot(fig, f"{title}_entropy_lines", subfolder=subfolder)
     
     # Display plot in notebook
     if _ipython_available:
@@ -2166,7 +2183,7 @@ def plot_entropy_lines_undersampling(x_train, y_train, x_grid, y_clean, mu_pred,
 
 
 def plot_uncertainties_undersampling_normalized(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var,
-                                                region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3):
+                                                region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3, save_individual=True):
     """Plot normalized variance-based uncertainties with undersampling regions highlighted
     
     Args:
@@ -2336,9 +2353,10 @@ def plot_uncertainties_undersampling_normalized(x_train, y_train, x_grid, y_clea
     
     plt.tight_layout()
     
-    # Save plot with organized folder structure
-    subfolder = f"uncertainties_undersampling_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_undersampling_normalized/{noise_type}"
-    save_plot(fig, f"{title}_normalized", subfolder=subfolder)
+    if save_individual:
+        # Save plot with organized folder structure
+        subfolder = f"uncertainties_undersampling_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_undersampling_normalized/{noise_type}"
+        save_plot(fig, f"{title}_normalized", subfolder=subfolder)
     
     # Display plot in notebook
     if _ipython_available:
@@ -2348,7 +2366,7 @@ def plot_uncertainties_undersampling_normalized(x_train, y_train, x_grid, y_clea
 
 
 def plot_uncertainties_entropy_undersampling_normalized(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy,
-                                                         region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3):
+                                                         region_masks, sampling_regions, title, noise_type='heteroscedastic', func_type='', scale_factor=0.3, save_individual=True):
     """Plot normalized entropy-based uncertainties with undersampling regions highlighted
     
     Args:
@@ -2514,9 +2532,10 @@ def plot_uncertainties_entropy_undersampling_normalized(x_train, y_train, x_grid
     
     plt.tight_layout()
     
-    # Save plot with organized folder structure
-    subfolder = f"uncertainties_entropy_undersampling_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_undersampling_normalized/{noise_type}"
-    save_plot(fig, f"{title}_entropy_normalized", subfolder=subfolder)
+    if save_individual:
+        # Save plot with organized folder structure
+        subfolder = f"uncertainties_entropy_undersampling_normalized/{noise_type}/{func_type}" if func_type else f"uncertainties_entropy_undersampling_normalized/{noise_type}"
+        save_plot(fig, f"{title}_entropy_normalized", subfolder=subfolder)
     
     # Display plot in notebook
     if _ipython_available:

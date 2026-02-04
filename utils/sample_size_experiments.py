@@ -18,7 +18,16 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
 
-from utils.results_save import save_summary_statistics, save_summary_statistics_entropy, save_model_outputs, save_combined_statistics_excel
+from utils.results_save import save_summary_statistics, save_summary_statistics_entropy, save_model_outputs, save_combined_statistics_excel, save_combined_sample_size_excel
+from utils.dashboards import create_experiment_dashboard
+
+# Module-level accumulator for combined Excel files
+# Structure: {noise_type: {(model_name, func_type): {'variance': df, 'entropy': df}}}
+_accumulated_sample_size_stats = {}
+
+# Module-level accumulator for panel plots
+# Structure: {noise_type: {(model_name, func_type, plot_type): {pct: plot_data}}}
+_accumulated_sample_size_plot_data = {}
 from utils.plotting import (
     plot_uncertainties_no_ood, 
     plot_uncertainties_entropy_no_ood,
@@ -449,7 +458,7 @@ def compute_and_save_statistics(
             else:
                 spearman_epistemic_list.append(None)
     
-    # Save summary statistics
+    # Save summary statistics (don't save individual files, accumulate for combined Excel)
     stats_df, fig = save_summary_statistics(
         percentages, avg_ale_norm_list, avg_epi_norm_list,
         avg_tot_norm_list, correlation_list,
@@ -460,8 +469,17 @@ def compute_and_save_statistics(
         nll_list=nll_list if nll_list else None,
         crps_list=crps_list if crps_list else None,
         spearman_aleatoric_list=spearman_aleatoric_list if spearman_aleatoric_list else None,
-        spearman_epistemic_list=spearman_epistemic_list if spearman_epistemic_list else None
+        spearman_epistemic_list=spearman_epistemic_list if spearman_epistemic_list else None,
+        save_individual=False
     )
+    
+    # Accumulate statistics for combined Excel file
+    if noise_type not in _accumulated_sample_size_stats:
+        _accumulated_sample_size_stats[noise_type] = {}
+    key = (model_name, func_type)
+    if key not in _accumulated_sample_size_stats[noise_type]:
+        _accumulated_sample_size_stats[noise_type][key] = {}
+    _accumulated_sample_size_stats[noise_type][key]['variance'] = stats_df
     plt.show()
     plt.close(fig)
     
@@ -602,15 +620,24 @@ def compute_and_save_statistics_entropy(
     print("      Correlation is computed on original (non-normalized) entropy values")
     print(f"{'='*60}")
     
-    # Save summary statistics
+    # Save summary statistics (don't save individual files, accumulate for combined Excel)
     stats_df, fig = save_summary_statistics_entropy(
         percentages, avg_ale_entropy_list, avg_epi_entropy_list,
         avg_tot_entropy_list, correlation_list,
         function_name, noise_type=noise_type,
         func_type=func_type, model_name=model_name,
         mse_list=mse_list if mse_list else None,
-        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
+        save_individual=False
     )
+    
+    # Accumulate statistics for combined Excel file
+    if noise_type not in _accumulated_sample_size_stats:
+        _accumulated_sample_size_stats[noise_type] = {}
+    key = (model_name, func_type)
+    if key not in _accumulated_sample_size_stats[noise_type]:
+        _accumulated_sample_size_stats[noise_type][key] = {}
+    _accumulated_sample_size_stats[noise_type][key]['entropy'] = stats_df
     plt.show()
     plt.close(fig)
     
@@ -979,14 +1006,8 @@ def run_mc_dropout_sample_size_experiment(
             date=date, dropout_p=p, mc_samples=mc_samples
         )
         
-        # Save combined Excel file
-        save_combined_statistics_excel(
-            variance_stats_df, entropy_stats_df,
-            function_names[func_type], noise_type=noise_type,
-            func_type=func_type, model_name='MC_Dropout',
-            subfolder=f"{noise_type}/{func_type}",
-            date=date, dropout_p=p, mc_samples=mc_samples
-        )
+        # Statistics are accumulated in _accumulated_sample_size_stats
+        # Combined Excel file will be saved at the end via save_all_sample_size_statistics()
 
 
 def run_deep_ensemble_sample_size_experiment(
@@ -1338,14 +1359,8 @@ def run_deep_ensemble_sample_size_experiment(
             date=date, n_nets=K
         )
         
-        # Save combined Excel file
-        save_combined_statistics_excel(
-            variance_stats_df, entropy_stats_df,
-            function_names[func_type], noise_type=noise_type,
-            func_type=func_type, model_name='Deep_Ensemble',
-            subfolder=f"{noise_type}/{func_type}",
-            date=date, n_nets=K
-        )
+        # Statistics are accumulated in _accumulated_sample_size_stats
+        # Combined Excel file will be saved at the end via save_all_sample_size_statistics()
 
 
 def run_bnn_sample_size_experiment(
@@ -1428,7 +1443,12 @@ def run_bnn_sample_size_experiment(
         
         n_train_full_actual = len(x_train_full)
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
+        uncertainties_entropy_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
+        nll_by_pct = {pct: [] for pct in percentages}
+        crps_by_pct = {pct: [] for pct in percentages}
+        spearman_aleatoric_by_pct = {pct: [] for pct in percentages}
+        spearman_epistemic_by_pct = {pct: [] for pct in percentages}
         
         num_gpus = get_num_gpus()
         use_gpu = num_gpus > 0 and parallel
@@ -1454,6 +1474,9 @@ def run_bnn_sample_size_experiment(
                     uncertainties_by_pct[pct]['ale'].append(ale_var)
                     uncertainties_by_pct[pct]['epi'].append(epi_var)
                     uncertainties_by_pct[pct]['tot'].append(tot_var)
+                    uncertainties_entropy_by_pct[pct]['ale'].append(ale_entropy)
+                    uncertainties_entropy_by_pct[pct]['epi'].append(epi_entropy)
+                    uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                     mse_by_pct[pct].append(mse)
                     
                     # Compute predictive aggregation (μ*, σ*²)
@@ -1589,7 +1612,28 @@ def run_bnn_sample_size_experiment(
                 uncertainties_by_pct[pct]['ale'].append(ale_var)
                 uncertainties_by_pct[pct]['epi'].append(epi_var)
                 uncertainties_by_pct[pct]['tot'].append(tot_var)
+                uncertainties_entropy_by_pct[pct]['ale'].append(ale_entropy)
+                uncertainties_entropy_by_pct[pct]['epi'].append(epi_entropy)
+                uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                 mse_by_pct[pct].append(mse)
+                
+                # Compute predictive aggregation (μ*, σ*²)
+                mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
+                
+                # Compute true noise variance for grid points
+                true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
+                
+                # Compute NLL, CRPS, and disentanglement metrics
+                nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
+                crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                disentangle = compute_uncertainty_disentanglement(
+                    y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
+                )
+                
+                nll_by_pct[pct].append(nll)
+                crps_by_pct[pct].append(crps)
+                spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
+                spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
                 
                 # Save raw model outputs
                 save_model_outputs(
@@ -1670,14 +1714,8 @@ def run_bnn_sample_size_experiment(
             date=date
         )
         
-        # Save combined Excel file
-        save_combined_statistics_excel(
-            variance_stats_df, entropy_stats_df,
-            function_names[func_type], noise_type=noise_type,
-            func_type=func_type, model_name='BNN',
-            subfolder=f"{noise_type}/{func_type}",
-            date=date
-        )
+        # Statistics are accumulated in _accumulated_sample_size_stats
+        # Combined Excel file will be saved at the end via save_all_sample_size_statistics()
 
 
 def run_bamlss_sample_size_experiment(
@@ -1752,6 +1790,7 @@ def run_bamlss_sample_size_experiment(
         
         n_train_full_actual = len(x_train_full)
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
+        uncertainties_entropy_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
         nll_by_pct = {pct: [] for pct in percentages}
         crps_by_pct = {pct: [] for pct in percentages}
@@ -1776,6 +1815,9 @@ def run_bamlss_sample_size_experiment(
                     uncertainties_by_pct[pct]['ale'].append(ale_var)
                     uncertainties_by_pct[pct]['epi'].append(epi_var)
                     uncertainties_by_pct[pct]['tot'].append(tot_var)
+                    uncertainties_entropy_by_pct[pct]['ale'].append(ale_entropy)
+                    uncertainties_entropy_by_pct[pct]['epi'].append(epi_entropy)
+                    uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                     mse_by_pct[pct].append(mse)
                     
                     # Compute predictive aggregation (μ*, σ*²)
@@ -1901,6 +1943,9 @@ def run_bamlss_sample_size_experiment(
                 uncertainties_by_pct[pct]['ale'].append(ale_var)
                 uncertainties_by_pct[pct]['epi'].append(epi_var)
                 uncertainties_by_pct[pct]['tot'].append(tot_var)
+                uncertainties_entropy_by_pct[pct]['ale'].append(ale_entropy)
+                uncertainties_entropy_by_pct[pct]['epi'].append(epi_entropy)
+                uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                 mse_by_pct[pct].append(mse)
                 
                 # Compute predictive aggregation (μ*, σ*²)
@@ -2000,12 +2045,56 @@ def run_bamlss_sample_size_experiment(
             date=date
         )
         
-        # Save combined Excel file
-        save_combined_statistics_excel(
-            variance_stats_df, entropy_stats_df,
-            function_names[func_type], noise_type=noise_type,
-            func_type=func_type, model_name='BAMLSS',
-            subfolder=f"{noise_type}/{func_type}",
+        # Statistics are accumulated in _accumulated_sample_size_stats
+        # Combined Excel file will be saved at the end via save_all_sample_size_statistics()
+
+
+def save_all_sample_size_statistics(noise_type='heteroscedastic', date=None):
+    """
+    Save all accumulated sample size statistics to a single combined Excel file.
+    
+    This function should be called after all model experiments are complete.
+    
+    Args:
+        noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
+        date: Optional date string in YYYYMMDD format
+    """
+    if noise_type not in _accumulated_sample_size_stats:
+        print(f"No accumulated statistics found for noise_type={noise_type}")
+        return
+    
+    accumulated_stats = _accumulated_sample_size_stats[noise_type]
+    if not accumulated_stats:
+        print(f"No accumulated statistics found for noise_type={noise_type}")
+        return
+    
+    save_combined_sample_size_excel(
+        accumulated_stats,
+        noise_type=noise_type,
+        date=date,
+        subfolder='sample_size'
+    )
+    
+    # Generate dashboard
+    print(f"\n{'='*80}")
+    print("Generating sample size experiment dashboard...")
+    print(f"{'='*80}\n")
+    try:
+        create_experiment_dashboard(
+            experiment_type='sample_size',
+            accumulated_stats=accumulated_stats,
+            noise_type=noise_type,
             date=date
         )
+        print(f"\n{'='*80}")
+        print("Dashboard generation completed.")
+        print(f"{'='*80}\n")
+    except Exception as e:
+        print(f"Error generating dashboard: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Generate panel plots
+    from utils.panel_plotting import save_all_sample_size_panel_plots
+    save_all_sample_size_panel_plots(date=date, subfolder='sample_size')
 

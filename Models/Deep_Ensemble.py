@@ -21,10 +21,10 @@ base_seed = 42
 
 # ----- Baseline regression model (Appendix B) -----
 class BaselineRegressor(nn.Module):
-    def __init__(self):
+    def __init__(self, input_dim=1):
         super().__init__()
         self.trunk = nn.Sequential(
-            nn.Linear(1, 32),
+            nn.Linear(input_dim, 32),
             nn.ReLU(),
             nn.Linear(32, 32),
             nn.ReLU(),
@@ -73,7 +73,7 @@ def train_single_ensemble(model, loader, epochs=500, lr=1e-3, loss_type='nll', b
             print(f"[{loss_type}] Epoch {epoch+1}/{epochs} - avg loss {total_loss/len(loader.dataset):.4f}")
 
 # ----- Train an ensemble of K models -----
-def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', beta=0.5, parallel=True, epochs=500):
+def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', beta=0.5, parallel=True, epochs=500, input_dim=1):
     """
     Train an ensemble of K models.
     
@@ -85,6 +85,7 @@ def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', 
         loss_type: 'nll' or 'beta_nll'
         beta: Beta parameter for beta-NLL loss
         parallel: If True, train ensemble members in parallel using ThreadPoolExecutor
+        input_dim: Input dimension (1 for univariate, 2 for OVB with X and Z)
     
     Returns:
         List of trained models
@@ -94,7 +95,7 @@ def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', 
 
     def train_member(k):
         """Train a single ensemble member."""
-        model = BaselineRegressor()
+        model = BaselineRegressor(input_dim=input_dim)
         # Different seed per member to vary initialization and shuffling
         member_seed = base_seed + 1000 + k
         train_single_ensemble(model, loader, epochs=epochs, lr=1e-3, loss_type=loss_type, beta=beta, seed=member_seed)

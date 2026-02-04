@@ -17,6 +17,8 @@ plotly>=5.15.0
 jupyter>=1.0.0
 ipykernel>=6.25.0
 notebook>=6.5.0
+nbclient>=0.8.0
+nbformat>=5.9.0
 
 # Statistical tests and distributions
 pingouin>=0.5.3

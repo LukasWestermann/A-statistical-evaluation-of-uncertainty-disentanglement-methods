@@ -21,10 +21,10 @@ device = get_device()
 
 # ----- Model per Appendix B (Regression) -----
 class MCDropoutRegressor(nn.Module):
-    def __init__(self, p=0.25):
+    def __init__(self, p=0.25, input_dim=1):
         super().__init__()
         self.trunk = nn.Sequential(
-            nn.Linear(1, 32),
+            nn.Linear(input_dim, 32),
             nn.ReLU(),
             nn.Dropout(p),
             nn.Linear(32, 32),

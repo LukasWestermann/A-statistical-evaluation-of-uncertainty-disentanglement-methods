@@ -18,7 +18,8 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
 
-from utils.results_save import save_summary_statistics_noise_level, save_summary_statistics_entropy_noise_level, save_model_outputs, save_combined_statistics_excel
+from utils.results_save import save_summary_statistics_noise_level, save_summary_statistics_entropy_noise_level, save_model_outputs, save_combined_statistics_excel, save_combined_noise_level_excel
+from utils.dashboards import create_experiment_dashboard
 from utils.plotting import (
     plot_uncertainties_no_ood,
     plot_uncertainties_entropy_no_ood,
@@ -43,6 +44,135 @@ try:
 except RuntimeError:
     # Already set, ignore
     pass
+
+# Module-level accumulator for combined Excel files
+# Structure: {(noise_type, distribution): {(model_name, func_type): {'variance': df, 'entropy': df}}}
+_accumulated_noise_level_stats = {}
+
+# Module-level accumulator for panel plots
+# Structure: {(noise_type, distribution): {(model_name, func_type, plot_type): {tau: plot_data}}}
+_accumulated_plot_data = {}
+
+
+def accumulate_plot_data(
+    x_train, y_train, x_grid, y_grid_clean,
+    mu_pred, ale_var, epi_var, tot_var,
+    ale_entropy=None, epi_entropy=None, tot_entropy=None,
+    model_name='', func_type='', noise_type='heteroscedastic',
+    distribution='normal', tau=None, plot_type='variance'
+):
+    """
+    Store plot data for later panel plotting instead of saving individually.
+    
+    Args:
+        x_train, y_train: Training data
+        x_grid, y_grid_clean: Grid points and clean function values
+        mu_pred: Predictive mean
+        ale_var, epi_var, tot_var: Variance-based uncertainties
+        ale_entropy, epi_entropy, tot_entropy: Entropy-based uncertainties (optional)
+        model_name: Model name
+        func_type: Function type ('linear' or 'sin')
+        noise_type: Noise type ('heteroscedastic' or 'homoscedastic')
+        distribution: Distribution type ('normal' or 'laplace')
+        tau: Tau value
+        plot_type: 'variance', 'entropy', 'normalized_variance', 'normalized_entropy', 'entropy_lines'
+    """
+    if tau is None:
+        return  # Skip if tau not provided
+    
+    key = (noise_type, distribution)
+    if key not in _accumulated_plot_data:
+        _accumulated_plot_data[key] = {}
+    
+    plot_key = (model_name, func_type, plot_type)
+    if plot_key not in _accumulated_plot_data[key]:
+        _accumulated_plot_data[key][plot_key] = {}
+    
+    # Store essential arrays (ensure they're numpy arrays)
+    _accumulated_plot_data[key][plot_key][tau] = {
+        'x_train': np.asarray(x_train),
+        'y_train': np.asarray(y_train),
+        'x_grid': np.asarray(x_grid),
+        'y_grid_clean': np.asarray(y_grid_clean),
+        'mu_pred': np.asarray(mu_pred).squeeze(),
+        'ale_var': np.asarray(ale_var).squeeze(),
+        'epi_var': np.asarray(epi_var).squeeze(),
+        'tot_var': np.asarray(tot_var).squeeze(),
+    }
+    
+    # Add entropy data if provided
+    if ale_entropy is not None:
+        _accumulated_plot_data[key][plot_key][tau]['ale_entropy'] = np.asarray(ale_entropy).squeeze()
+    if epi_entropy is not None:
+        _accumulated_plot_data[key][plot_key][tau]['epi_entropy'] = np.asarray(epi_entropy).squeeze()
+    if tot_entropy is not None:
+        _accumulated_plot_data[key][plot_key][tau]['tot_entropy'] = np.asarray(tot_entropy).squeeze()
+
+
+def save_all_accumulated_noise_level_stats(date=None):
+    """
+    Save all accumulated noise level statistics to combined Excel files.
+    Should be called after all experiments are complete.
+    
+    Args:
+        date: Optional date string in YYYYMMDD format. If None, uses current date.
+    """
+    if date is None:
+        date = datetime.now().strftime('%Y%m%d')
+    
+    if not _accumulated_noise_level_stats:
+        print("No accumulated statistics to save.")
+        return
+    
+    print(f"\n{'='*80}")
+    print("Saving combined noise level statistics to Excel files...")
+    print(f"{'='*80}\n")
+    
+    for (noise_type, distribution), stats_dict in _accumulated_noise_level_stats.items():
+        if not stats_dict:
+            continue
+        
+        print(f"Saving combined file for {noise_type} noise, {distribution} distribution...")
+        try:
+            save_combined_noise_level_excel(
+                accumulated_stats=stats_dict,
+                noise_type=noise_type,
+                distribution=distribution,
+                date=date,
+                subfolder='noise_level'
+            )
+        except Exception as e:
+            print(f"Error saving combined file for {noise_type}/{distribution}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Generate dashboard for this noise_type/distribution combination
+        print(f"\nGenerating dashboard for {noise_type} noise, {distribution} distribution...")
+        try:
+            create_experiment_dashboard(
+                experiment_type='noise_level',
+                accumulated_stats=stats_dict,
+                noise_type=noise_type,
+                date=date,
+                distribution=distribution
+            )
+        except Exception as e:
+            print(f"Error generating dashboard for {noise_type}/{distribution}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    print(f"\n{'='*80}")
+    print("Finished saving combined noise level statistics and dashboards.")
+    print(f"{'='*80}\n")
+    
+    # Generate and save panel plots
+    try:
+        from utils.panel_plotting import save_all_panel_plots
+        save_all_panel_plots(date=date, subfolder='noise_level')
+    except Exception as e:
+        print(f"Error generating panel plots: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ========== Parallel execution wrapper functions ==========
@@ -379,7 +509,7 @@ def compute_and_save_statistics_noise_level(
             else:
                 spearman_epistemic_list.append(None)
     
-    # Save summary statistics
+    # Save summary statistics (don't save individual files, accumulate for combined file)
     stats_df, fig = save_summary_statistics_noise_level(
         tau_values, avg_ale_norm_list, avg_epi_norm_list,
         avg_tot_norm_list, correlation_list, mse_list,
@@ -389,10 +519,20 @@ def compute_and_save_statistics_noise_level(
         nll_list=nll_list if nll_list else None,
         crps_list=crps_list if crps_list else None,
         spearman_aleatoric_list=spearman_aleatoric_list if spearman_aleatoric_list else None,
-        spearman_epistemic_list=spearman_epistemic_list if spearman_epistemic_list else None
+        spearman_epistemic_list=spearman_epistemic_list if spearman_epistemic_list else None,
+        save_individual=False  # Don't save individual files, accumulate for combined
     )
     plt.show()
     plt.close(fig)
+    
+    # Accumulate statistics for combined Excel file
+    key = (noise_type, distribution)
+    if key not in _accumulated_noise_level_stats:
+        _accumulated_noise_level_stats[key] = {}
+    _accumulated_noise_level_stats[key][(model_name, func_type)] = {
+        'variance': stats_df,
+        'entropy': None  # Will be set when entropy stats are computed
+    }
     
     return {
         'tau_values': tau_values,
@@ -417,7 +557,8 @@ def compute_and_save_statistics_entropy_noise_level(
     date: str = None,
     dropout_p: float = None,
     mc_samples: int = None,
-    n_nets: int = None
+    n_nets: int = None,
+    save_individual: bool = False
 ):
     """
     Shared function to compute normalized entropy-based statistics and save results for noise level experiments.
@@ -451,6 +592,9 @@ def compute_and_save_statistics_entropy_noise_level(
         Number of MC samples for MC Dropout
     n_nets : int, optional
         Number of nets for Deep Ensemble
+    save_individual : bool, optional
+        If True, save individual Excel file. If False, only accumulate for combined file.
+        Default is False.
     
     Returns:
     --------
@@ -526,16 +670,25 @@ def compute_and_save_statistics_entropy_noise_level(
     print("      Correlation is computed on original (non-normalized) entropy values")
     print(f"{'='*60}")
     
-    # Save summary statistics
+    # Save summary statistics (don't save individual files, accumulate for combined file)
     stats_df, fig = save_summary_statistics_entropy_noise_level(
         tau_values, avg_ale_entropy_list, avg_epi_entropy_list,
         avg_tot_entropy_list, correlation_list, mse_list,
         function_name, distribution=distribution,
         noise_type=noise_type, func_type=func_type, model_name=model_name,
-        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets
+        date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
+        save_individual=save_individual
     )
     plt.show()
     plt.close(fig)
+    
+    # Accumulate entropy statistics for combined Excel file
+    key = (noise_type, distribution)
+    if key not in _accumulated_noise_level_stats:
+        _accumulated_noise_level_stats[key] = {}
+    if (model_name, func_type) not in _accumulated_noise_level_stats[key]:
+        _accumulated_noise_level_stats[key][(model_name, func_type)] = {'variance': None, 'entropy': None}
+    _accumulated_noise_level_stats[key][(model_name, func_type)]['entropy'] = stats_df
     
     return {
         'tau_values': tau_values,
@@ -565,7 +718,8 @@ def run_mc_dropout_noise_level_experiment(
     batch_size: int = 32,
     mc_samples: int = 100,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'analytical',
+    save_individual_plots: bool = True
 ):
     """
     Run noise level experiment for MC Dropout model.
@@ -731,13 +885,56 @@ def run_mc_dropout_noise_level_experiment(
                             date=date
                         )
                         
+                        # Accumulate plot data for panel plots
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='MC_Dropout', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='variance'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='MC_Dropout', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='entropy'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='MC_Dropout', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='normalized_variance'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='MC_Dropout', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='normalized_entropy'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='MC_Dropout', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='entropy_lines'
+                        )
+                        
                         # Plot variance-based uncertainties
                         plot_uncertainties_no_ood(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
                             title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
                             noise_type=noise_type,
-                            func_type=func_type
+                            func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot entropy-based uncertainties
@@ -746,7 +943,8 @@ def run_mc_dropout_noise_level_experiment(
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
                             noise_type=noise_type,
-                            func_type=func_type
+                            func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot entropy lines (in nats)
@@ -755,7 +953,8 @@ def run_mc_dropout_noise_level_experiment(
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution})",
                             noise_type=noise_type,
-                            func_type=func_type
+                            func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot normalized variance-based uncertainties
@@ -764,7 +963,8 @@ def run_mc_dropout_noise_level_experiment(
                             mu_pred, ale_var, epi_var, tot_var,
                             title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
                             noise_type=noise_type,
-                            func_type=func_type
+                            func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot normalized entropy-based uncertainties
@@ -773,7 +973,8 @@ def run_mc_dropout_noise_level_experiment(
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
                             noise_type=noise_type,
-                            func_type=func_type
+                            func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                 except Exception as e:
                     print(f"Parallel execution failed: {e}. Falling back to sequential execution.")
@@ -874,13 +1075,56 @@ def run_mc_dropout_noise_level_experiment(
                         date=date
                     )
                     
+                    # Accumulate plot data for panel plots
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='MC_Dropout', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='variance'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='MC_Dropout', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='entropy'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='MC_Dropout', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='normalized_variance'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='MC_Dropout', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='normalized_entropy'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='MC_Dropout', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='entropy_lines'
+                    )
+                    
                     # Plot variance-based uncertainties
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
                         title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
                         noise_type=noise_type,
-                        func_type=func_type
+                        func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot entropy-based uncertainties
@@ -889,7 +1133,8 @@ def run_mc_dropout_noise_level_experiment(
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
                         noise_type=noise_type,
-                        func_type=func_type
+                        func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot entropy lines (in nats)
@@ -898,7 +1143,8 @@ def run_mc_dropout_noise_level_experiment(
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution})",
                         noise_type=noise_type,
-                        func_type=func_type
+                        func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot normalized variance-based uncertainties
@@ -907,7 +1153,8 @@ def run_mc_dropout_noise_level_experiment(
                         mu_pred, ale_var, epi_var, tot_var,
                         title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
                         noise_type=noise_type,
-                        func_type=func_type
+                        func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot normalized entropy-based uncertainties
@@ -916,7 +1163,8 @@ def run_mc_dropout_noise_level_experiment(
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"MC Dropout (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
                         noise_type=noise_type,
-                        func_type=func_type
+                        func_type=func_type,
+                        save_individual=save_individual_plots
                     )
             
             # Compute and save variance-based statistics
@@ -931,24 +1179,18 @@ def run_mc_dropout_noise_level_experiment(
             )
             variance_stats_df = variance_stats_result['stats_df']
             
-            # Compute and save entropy-based statistics
+            # Compute and save entropy-based statistics (don't save individual files, accumulate for combined)
             entropy_stats_result = compute_and_save_statistics_entropy_noise_level(
                 uncertainties_entropy_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'MC_Dropout',
-                date=date, dropout_p=p, mc_samples=mc_samples
+                date=date, dropout_p=p, mc_samples=mc_samples,
+                save_individual=False  # Don't save individual files, accumulate for combined
             )
             entropy_stats_df = entropy_stats_result['stats_df']
             
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_stats_df, entropy_stats_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='MC_Dropout',
-                subfolder=f"{noise_type}/{func_type}/{distribution}",
-                date=date, dropout_p=p, mc_samples=mc_samples,
-                distribution=distribution
-            )
+            # Note: Combined Excel file will be saved at the end via save_all_accumulated_noise_level_stats()
+            # Individual combined files per model/function are no longer created
 
 
 def run_deep_ensemble_noise_level_experiment(
@@ -966,7 +1208,8 @@ def run_deep_ensemble_noise_level_experiment(
     K: int = 20,
     epochs: int = 500,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'analytical',
+    save_individual_plots: bool = True
 ):
     """
     Run noise level experiment for Deep Ensemble model.
@@ -1118,12 +1361,55 @@ def run_deep_ensemble_noise_level_experiment(
                             date=date
                         )
                         
+                        # Accumulate plot data for panel plots
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='Deep_Ensemble', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='variance'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='Deep_Ensemble', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='entropy'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='Deep_Ensemble', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='normalized_variance'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='Deep_Ensemble', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='normalized_entropy'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='Deep_Ensemble', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='entropy_lines'
+                        )
+                        
                         # Plot variance-based uncertainties
                         plot_uncertainties_no_ood(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
                             title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot entropy-based uncertainties
@@ -1131,7 +1417,8 @@ def run_deep_ensemble_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot entropy lines (in nats)
@@ -1139,7 +1426,8 @@ def run_deep_ensemble_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution})",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot normalized variance-based uncertainties
@@ -1147,7 +1435,8 @@ def run_deep_ensemble_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
                             title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot normalized entropy-based uncertainties
@@ -1155,7 +1444,8 @@ def run_deep_ensemble_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                 except Exception as e:
                     print(f"Parallel execution failed: {e}. Falling back to sequential execution.")
@@ -1249,12 +1539,55 @@ def run_deep_ensemble_noise_level_experiment(
                         date=date
                     )
                     
+                    # Accumulate plot data for panel plots
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='Deep_Ensemble', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='variance'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='Deep_Ensemble', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='entropy'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='Deep_Ensemble', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='normalized_variance'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='Deep_Ensemble', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='normalized_entropy'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='Deep_Ensemble', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='entropy_lines'
+                    )
+                    
                     # Plot variance-based uncertainties
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
                         title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot entropy-based uncertainties
@@ -1262,7 +1595,8 @@ def run_deep_ensemble_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot entropy lines (in nats)
@@ -1270,7 +1604,8 @@ def run_deep_ensemble_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution})",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot normalized variance-based uncertainties
@@ -1278,7 +1613,8 @@ def run_deep_ensemble_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
                         title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot normalized entropy-based uncertainties
@@ -1286,7 +1622,8 @@ def run_deep_ensemble_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"Deep Ensemble (β-NLL, β={beta}) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
             
             # Compute and save variance-based statistics
@@ -1301,23 +1638,18 @@ def run_deep_ensemble_noise_level_experiment(
             )
             variance_stats_df = variance_stats_result['stats_df']
             
-            # Compute and save entropy-based statistics
+            # Compute and save entropy-based statistics (don't save individual files, accumulate for combined)
             entropy_stats_result = compute_and_save_statistics_entropy_noise_level(
                 uncertainties_entropy_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'Deep_Ensemble',
-                date=date, n_nets=K
+                date=date, n_nets=K,
+                save_individual=False  # Don't save individual files, accumulate for combined
             )
             entropy_stats_df = entropy_stats_result['stats_df']
             
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_stats_df, entropy_stats_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='Deep_Ensemble',
-                subfolder=f"{noise_type}/{func_type}/{distribution}",
-                date=date, n_nets=K, distribution=distribution
-            )
+            # Note: Combined Excel file will be saved at the end via save_all_accumulated_noise_level_stats()
+            # Individual combined files per model/function are no longer created
 
 
 def run_bnn_noise_level_experiment(
@@ -1336,7 +1668,8 @@ def run_bnn_noise_level_experiment(
     samples: int = 200,
     chains: int = 1,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'analytical',
+    save_individual_plots: bool = True
 ):
     """
     Run noise level experiment for BNN (Bayesian Neural Network) model.
@@ -1489,12 +1822,55 @@ def run_bnn_noise_level_experiment(
                             date=date
                         )
                         
+                        # Accumulate plot data for panel plots
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='BNN', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='variance'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='BNN', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='entropy'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='BNN', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='normalized_variance'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='BNN', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='normalized_entropy'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='BNN', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='entropy_lines'
+                        )
+                        
                         # Plot variance-based uncertainties
                         plot_uncertainties_no_ood(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
                             title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot entropy-based uncertainties
@@ -1502,7 +1878,8 @@ def run_bnn_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot entropy lines (in nats)
@@ -1510,7 +1887,8 @@ def run_bnn_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution})",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot normalized variance-based uncertainties
@@ -1518,7 +1896,8 @@ def run_bnn_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
                             title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot normalized entropy-based uncertainties
@@ -1526,7 +1905,8 @@ def run_bnn_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                 except Exception as e:
                     print(f"Parallel execution failed: {e}. Falling back to sequential execution.")
@@ -1623,12 +2003,55 @@ def run_bnn_noise_level_experiment(
                         date=date
                     )
                     
+                    # Accumulate plot data for panel plots
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='BNN', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='variance'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='BNN', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='entropy'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='BNN', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='normalized_variance'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='BNN', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='normalized_entropy'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='BNN', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='entropy_lines'
+                    )
+                    
                     # Plot variance-based uncertainties
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
                         title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot entropy-based uncertainties
@@ -1636,7 +2059,8 @@ def run_bnn_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot entropy lines (in nats)
@@ -1644,7 +2068,8 @@ def run_bnn_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution})",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot normalized variance-based uncertainties
@@ -1652,7 +2077,8 @@ def run_bnn_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
                         title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot normalized entropy-based uncertainties
@@ -1660,7 +2086,8 @@ def run_bnn_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"BNN (Pyro NUTS) - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
             
             # Compute and save variance-based statistics
@@ -1675,23 +2102,18 @@ def run_bnn_noise_level_experiment(
             )
             variance_stats_df = variance_stats_result['stats_df']
             
-            # Compute and save entropy-based statistics
+            # Compute and save entropy-based statistics (don't save individual files, accumulate for combined)
             entropy_stats_result = compute_and_save_statistics_entropy_noise_level(
                 uncertainties_entropy_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'BNN',
-                date=date
+                date=date,
+                save_individual=False  # Don't save individual files, accumulate for combined
             )
             entropy_stats_df = entropy_stats_result['stats_df']
             
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_stats_df, entropy_stats_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='BNN',
-                subfolder=f"{noise_type}/{func_type}/{distribution}",
-                date=date, distribution=distribution
-            )
+            # Note: Combined Excel file will be saved at the end via save_all_accumulated_noise_level_stats()
+            # Individual combined files per model/function are no longer created
 
 
 def run_bamlss_noise_level_experiment(
@@ -1709,7 +2131,8 @@ def run_bamlss_noise_level_experiment(
     thin: int = 10,
     nsamples: int = 1000,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'analytical',
+    save_individual_plots: bool = True
 ):
     """
     Run noise level experiment for BAMLSS model.
@@ -1850,12 +2273,55 @@ def run_bamlss_noise_level_experiment(
                             date=date
                         )
                         
+                        # Accumulate plot data for panel plots
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='BAMLSS', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='variance'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='BAMLSS', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='entropy'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='BAMLSS', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='normalized_variance'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='BAMLSS', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='normalized_entropy'
+                        )
+                        accumulate_plot_data(
+                            x_train_plot, y_train_plot, x_grid, y_grid_clean,
+                            mu_pred, ale_var, epi_var, tot_var,
+                            ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                            model_name='BAMLSS', func_type=func_type,
+                            noise_type=noise_type, distribution=distribution,
+                            tau=tau, plot_type='entropy_lines'
+                        )
+                        
                         # Plot variance-based uncertainties
                         plot_uncertainties_no_ood(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
                             title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot entropy-based uncertainties
@@ -1863,7 +2329,8 @@ def run_bamlss_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot entropy lines (in nats)
@@ -1871,7 +2338,8 @@ def run_bamlss_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution})",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot normalized variance-based uncertainties
@@ -1879,7 +2347,8 @@ def run_bamlss_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_var, epi_var, tot_var,
                             title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                         
                         # Plot normalized entropy-based uncertainties
@@ -1887,7 +2356,8 @@ def run_bamlss_noise_level_experiment(
                             x_train_plot, y_train_plot, x_grid, y_grid_clean,
                             mu_pred, ale_entropy, epi_entropy, tot_entropy,
                             title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                            noise_type=noise_type, func_type=func_type
+                            noise_type=noise_type, func_type=func_type,
+                            save_individual=save_individual_plots
                         )
                 except Exception as e:
                     print(f"Parallel execution failed: {e}. Falling back to sequential execution.")
@@ -1974,12 +2444,55 @@ def run_bamlss_noise_level_experiment(
                         date=date
                     )
                     
+                    # Accumulate plot data for panel plots
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='BAMLSS', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='variance'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='BAMLSS', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='entropy'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='BAMLSS', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='normalized_variance'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='BAMLSS', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='normalized_entropy'
+                    )
+                    accumulate_plot_data(
+                        x_train, y_train, x_grid, y_grid_clean,
+                        mu_pred, ale_var, epi_var, tot_var,
+                        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                        model_name='BAMLSS', func_type=func_type,
+                        noise_type=noise_type, distribution=distribution,
+                        tau=tau, plot_type='entropy_lines'
+                    )
+                    
                     # Plot variance-based uncertainties
                     plot_uncertainties_no_ood(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
                         title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot entropy-based uncertainties
@@ -1987,7 +2500,8 @@ def run_bamlss_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot entropy lines (in nats)
@@ -1995,7 +2509,8 @@ def run_bamlss_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution})",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot normalized variance-based uncertainties
@@ -2003,7 +2518,8 @@ def run_bamlss_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_var, epi_var, tot_var,
                         title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Variance",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
                     
                     # Plot normalized entropy-based uncertainties
@@ -2011,7 +2527,8 @@ def run_bamlss_noise_level_experiment(
                         x_train, y_train, x_grid, y_grid_clean,
                         mu_pred, ale_entropy, epi_entropy, tot_entropy,
                         title=f"BAMLSS - {function_names[func_type]} - τ={tau} ({distribution}) - Entropy",
-                        noise_type=noise_type, func_type=func_type
+                        noise_type=noise_type, func_type=func_type,
+                        save_individual=save_individual_plots
                     )
             
             # Compute and save variance-based statistics
@@ -2026,21 +2543,16 @@ def run_bamlss_noise_level_experiment(
             )
             variance_stats_df = variance_stats_result['stats_df']
             
-            # Compute and save entropy-based statistics
+            # Compute and save entropy-based statistics (don't save individual files, accumulate for combined)
             entropy_stats_result = compute_and_save_statistics_entropy_noise_level(
                 uncertainties_entropy_by_tau, mse_by_tau, tau_values,
                 function_names[func_type], distribution,
                 noise_type, func_type, 'BAMLSS',
-                date=date
+                date=date,
+                save_individual=False  # Don't save individual files, accumulate for combined
             )
             entropy_stats_df = entropy_stats_result['stats_df']
             
-            # Save combined Excel file
-            save_combined_statistics_excel(
-                variance_stats_df, entropy_stats_df,
-                function_names[func_type], noise_type=noise_type,
-                func_type=func_type, model_name='BAMLSS',
-                subfolder=f"{noise_type}/{func_type}/{distribution}",
-                date=date, distribution=distribution
-            )
+            # Note: Combined Excel file will be saved at the end via save_all_accumulated_noise_level_stats()
+            # Individual combined files per model/function are no longer created
 
