@@ -1,0 +1,41 @@
+############################
+# Python / project ignores #
+############################
+
+# Virtual environments
+venv/
+.venv/
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# Environment / OS
+.env
+.env.*
+.DS_Store
+Thumbs.db
+
+############################
+# Experiment artefacts     #
+############################
+
+# Plots and images
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Spreadsheets / tables
+*.csv
+*.tsv
+*.xlsx
+*.xls
+
+# Numpy / model output blobs
+*.npz
+*.npy
+
+# Results directories (optional: keep LaTeX, ignore heavy artefacts via extensions above)
+results/**/outputs/
+

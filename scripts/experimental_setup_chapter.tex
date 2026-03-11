@@ -1,0 +1,120 @@
+% =============================================================================
+% Chapter: General Experimental Setup (Regression)
+% =============================================================================
+% Requires in preamble: \usepackage{amsmath,amssymb,booktabs}
+% Include in thesis via \input{scripts/experimental_setup_chapter} or copy contents.
+% =============================================================================
+
+\chapter{General Experimental Setup}
+\label{ch:experimental-setup}
+
+This chapter defines the \emph{baseline} data-generating processes (DGPs), simulation parameters, and model hyperparameters used in the regression experiments. By ``baseline'' we mean the default settings from which individual experiments deviate: the same mean functions, noise specifications, sample sizes, and model configurations are used across experiments unless stated otherwise. In the results chapter (Chapter~\ref{ch:experiments}), these baseline simulation parameters are \emph{varied} in a controlled way for each experiment---for example, by changing the input support (out-of-distribution), the spatial sampling density (undersampling), the number of training points (sample size), the noise level or distribution (noise level), or the strength of an omitted confounder (OVB)---so as to induce or isolate different sources of epistemic and aleatoric uncertainty. The present chapter documents only the baseline; experiment-specific variations are described in the respective results sections.
+
+% -----------------------------------------------------------------------------
+\section{Regression Data-Generating Processes}
+\label{sec:regression-dgp}
+
+\subsection{General Baseline (Toy Regression)}
+\label{sec:general-baseline-dgp}
+
+The general regression setup is used in the out-of-distribution (OOD), undersampling, sample size, and noise level experiments. The outcome is generated as
+\begin{equation}
+  Y = f(X) + \varepsilon, \qquad \mathbb{E}[\varepsilon \mid X] = 0, \quad \text{scale}(\varepsilon \mid X) = \sigma(X),
+\end{equation}
+where \(X \in \mathbb{R}\) is the sole observed input. Training inputs are drawn uniformly from a fixed interval (the \emph{train range}); the precise interval is part of the baseline simulation parameters (Section~\ref{sec:baseline-sim-params}).
+
+\paragraph{Mean function.}
+Two mean functions \(f\) are used, referred to as \textbf{linear} and \textbf{sin} (nonlinear):
+\begin{align}
+  f_{\text{linear}}(x) &= 0.7x + 0.5, \\
+  f_{\text{sin}}(x)     &= x\sin(x) + x.
+\end{align}
+Both are evaluated in separate runs; we report results for each \texttt{func\_type} where relevant.
+
+\paragraph{Noise.}
+The conditional scale \(\sigma(X)\) is either constant or input-dependent:
+\begin{itemize}
+  \item \textbf{Homoscedastic:} \(\sigma(X) = \sigma_0\) with baseline \(\sigma_0 = 1\).
+  \item \textbf{Heteroscedastic:} \(\sigma(X) = \tau \bigl\lvert \sin(0.5 X + 5) \bigr\rvert\) with baseline \(\tau = 2.5\).
+\end{itemize}
+The default noise \emph{distribution} is Gaussian; \(\varepsilon \mid X\) is drawn from \(\mathcal{N}(0, \sigma^2(X))\). In the noise level experiment, the distribution is also varied (e.g.\ normal vs.\ Laplace) and the scale parameter \(\tau\) is swept over a grid; the baseline for that experiment remains \(\tau = 2.5\) for the heteroscedastic case and \(\tau = 1\) for the homoscedastic case where applicable.
+
+\paragraph{Input support.}
+Unless noted otherwise (e.g.\ in the OVB setup below), the canonical baseline training range is \(\mathcal{X}_{\text{train}} = [-5, 10]\). The covariate \(X\) is sampled uniformly over this interval for training; evaluation is performed on a regular grid over the same or an extended range depending on the experiment.
+
+% -----------------------------------------------------------------------------
+\subsection{OVB Baseline (Omitted Variable Bias)}
+\label{sec:ovb-baseline-dgp}
+
+The omitted variable bias (OVB) experiments use a separate DGP that extends the general setup with a latent confounder \(Z\). The true data-generating process is
+\begin{equation}
+  Y = f(X) + \beta_2 Z + \varepsilon,
+\end{equation}
+with \(f\) and \(\varepsilon\) as in Section~\ref{sec:general-baseline-dgp}. The latent variable \(Z\) is standard normal, \(Z \sim \mathcal{N}(0, 1)\), and the observed covariate \(X\) is constructed so that \(\mathrm{Corr}(X, Z) = \rho\):
+\begin{equation}
+  X = \rho Z + \sqrt{1 - \rho^2}\,\nu, \qquad \nu \sim \mathcal{N}(0, 1), \quad \nu \perp Z.
+\end{equation}
+The variable \(X\) is then scaled (affinely) to the chosen training interval. The baseline OVB parameters are \(\rho = 0.7\) and \(\beta_2 = 1.0\); the same choices for \(f\) (linear or sin) and for noise (homoscedastic with \(\sigma_0 = 1\) or heteroscedastic with \(\tau = 2.5\)) apply as in the general baseline. The OVB experiments use the training range \((0, 10)\) for \(X\).
+
+Critically, models are trained only on \((X, Y)\); \(Z\) is omitted from the regression. Varying \(\rho\) and \(\beta_2\) therefore controls the strength of confounding and induces model misspecification, which is reflected as epistemic uncertainty. The results chapter discusses how the uncertainty decomposition responds to these variations.
+
+% -----------------------------------------------------------------------------
+\section{Baseline Simulation Parameters}
+\label{sec:baseline-sim-params}
+
+Table~\ref{tab:baseline-sim-params} summarises the default simulation parameters used across regression experiments. Unless an experiment explicitly overrides them, these values define the baseline.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Baseline simulation parameters for regression experiments.}
+  \label{tab:baseline-sim-params}
+  \begin{tabular}{lll}
+    \toprule
+    Parameter & Baseline value(s) & Notes \\
+    \midrule
+    \(n\) (n\_train) & 1000 & All regression experiments \\
+    train\_range & \([-5, 10]\) & OOD, undersampling, sample size; OVB uses \((0, 10)\) \\
+    grid\_points & 1000 & OOD, undersampling, OVB, noise level; sample size utils use 600 \\
+    seed & 42 & All \\
+    noise\_type & heteroscedastic / homoscedastic & Both run; main baseline: heteroscedastic with \(\tau = 2.5\) \\
+    func\_type & linear, sin & Both run as separate conditions \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+In the results chapter, these baseline settings are \emph{varied} as follows to target different uncertainty sources:
+\begin{itemize}
+  \item \textbf{OOD:} Training remains on \([-5, 10]\); evaluation is extended to an out-of-distribution interval (e.g.\ \([10, 15]\)). The DGP is unchanged; only the support of evaluation changes, inducing extrapolation and epistemic uncertainty.
+  \item \textbf{Undersampling:} The same DGP is used, but training points are drawn non-uniformly over the train range. \texttt{sampling\_regions} and \texttt{density\_factor} vary (e.g.\ middle region \((4, 8)\) with factor 0.05 vs.\ 1), creating spatial sparsity and higher epistemic uncertainty in under-sampled regions.
+  \item \textbf{Sample size:} The same DGP is used; the number of training points is reduced to a given \emph{percentage} of the full baseline size (e.g.\ 5, 10, 15, 25, 50, 100\%) with \texttt{n\_train\_full} = 1000. Smaller samples increase epistemic uncertainty.
+  \item \textbf{Noise level:} The same DGP is used; the scale parameter \(\tau\) (e.g.\ 0.5, 1, 2, 2.5, 5, 10) and the noise \emph{distribution} (normal, Laplace) are varied to study aleatoric uncertainty and robustness.
+  \item \textbf{OVB:} The same \(f\) and noise specification are used; \(\rho\) and \(\beta_2\) are varied to study epistemic uncertainty due to the omitted confounder \(Z\).
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\section{Baseline Model Parameters}
+\label{sec:baseline-model-params}
+
+The regression models (MC Dropout, Deep Ensemble, BNN, BAMLSS) share a common set of default hyperparameters across experiments. These are listed in Table~\ref{tab:baseline-model-params}. Unless a specific experiment states otherwise, these baseline model parameters are used; any experiment-specific overrides are noted in the corresponding results section.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Baseline model hyperparameters for regression experiments.}
+  \label{tab:baseline-model-params}
+  \begin{tabular}{ll}
+    \toprule
+    Model & Key baseline hyperparameters \\
+    \midrule
+    MC Dropout & \(p = 0.25\); \(\beta\)-NLL with \(\beta = 0.5\); 100 MC samples; 500 epochs; lr \(10^{-3}\); batch size 32 \\
+    Deep Ensemble & \(K = 20\) networks; \(\beta = 0.5\); 500 epochs; batch size 32 \\
+    BNN & Hidden width 16; weight scale 1.0; 200 MCMC samples (200 warmup); 1 chain \\
+    BAMLSS & 12\,000 MCMC iterations; 2\,000 burn-in; thin 10; 1\,000 samples for prediction \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% -----------------------------------------------------------------------------
+\section{Summary}
+\label{sec:experimental-setup-summary}
+
+The baseline data-generating processes (general toy regression and OVB), simulation parameters, and model hyperparameters described in this chapter are the reference configuration for all regression experiments. In Chapter~\ref{ch:experiments}, we report how the uncertainty estimates and their decomposition respond when these baseline simulation parameters are varied in a controlled way for each experiment (OOD, undersampling, sample size, noise level, OVB). No changes to the present baseline are required for understanding those results; experiment-specific settings are stated where they differ from the tables above.

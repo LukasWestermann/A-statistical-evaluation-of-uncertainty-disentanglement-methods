@@ -385,6 +385,54 @@ def save_combined_undersampling_excel(accumulated_stats, noise_type='heterosceda
         raise
 
 
+def save_combined_classification_excel(accumulated_stats, experiment_type, date=None, subfolder=''):
+    """
+    Save accumulated classification statistics to a single Excel file with one sheet per model.
+    
+    Used for classification experiments (undersampling, sample_size, label_noise, rcd) so that
+    one workbook aggregates all models for that experiment type.
+    
+    Args:
+        accumulated_stats: Dictionary with structure:
+            { model_name: DataFrame }  (e.g. from _accumulated_classification_stats[experiment_type])
+        experiment_type: e.g. 'undersampling', 'sample_size', 'label_noise', 'rcd'
+        date: Optional date string in YYYYMMDD format
+        subfolder: Subfolder path for saving. If empty, writes to stats_dir (so combined file
+            sits next to per-model files when notebook set stats_dir per experiment).
+    
+    Returns:
+        Path: Path to saved Excel file
+    """
+    global stats_dir
+    if stats_dir is None:
+        _, stats_dir = _get_default_dirs()
+    
+    if subfolder:
+        save_dir = stats_dir / subfolder
+    else:
+        save_dir = stats_dir
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"classification_{experiment_type}_combined"
+    if date:
+        filename = f"{date}_{filename}"
+    excel_filepath = save_dir / f"{sanitize_filename(filename)}.xlsx"
+    
+    try:
+        with pd.ExcelWriter(excel_filepath, engine='openpyxl') as writer:
+            for model_name in sorted(accumulated_stats.keys()):
+                df = accumulated_stats[model_name]
+                sheet_name = model_name[:31] if len(model_name) > 31 else model_name
+                if df is not None and len(df) > 0:
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    print(f"  - Sheet '{sheet_name}': {len(df)} rows")
+        print(f"\nSaved combined classification statistics: {excel_filepath}")
+        return excel_filepath
+    except Exception as e:
+        print(f"Error saving combined classification Excel: {e}")
+        raise
+
+
 def save_combined_ood_excel(accumulated_stats, noise_type='heteroscedastic', 
                             date=None, subfolder=''):
     """

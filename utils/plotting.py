@@ -36,7 +36,8 @@ def plot_toy_data(x_train, y_train, x_grid, y_clean, title="Toy Regression Data"
     plt.close(fig)
 
 
-def plot_data_with_ood_regions(x_train, y_train, x_grid, y_grid_clean, train_range=None, train_ranges=None, ood_ranges=None, 
+def plot_data_with_ood_regions(x_train, y_train, x_grid, y_grid_clean, train_range=None, train_ranges=None, ood_ranges=None,
+                                x_ood=None, y_ood=None,
                                 title="Data Setup with OOD Regions", func_type='', save_plot_file=True):
     """
     Plot training data, evaluation grid, and highlight OOD regions.
@@ -50,6 +51,9 @@ def plot_data_with_ood_regions(x_train, y_train, x_grid, y_grid_clean, train_ran
         train_ranges: List of tuples [(min1, max1), (min2, max2), ...] for multiple training ranges
                      If provided, overrides train_range
         ood_ranges: List of tuples [(min1, max1), (min2, max2), ...] for OOD regions
+        x_ood: Optional simulated OOD data x values (same DGP as training, not used for training).
+               If both x_ood and y_ood are provided and non-empty, they are scattered in the OOD region.
+        y_ood: Optional simulated OOD data y values.
         title: Plot title
         func_type: Function type identifier (e.g., 'linear', 'sin')
         save_plot_file: Whether to save the plot
@@ -98,6 +102,14 @@ def plot_data_with_ood_regions(x_train, y_train, x_grid, y_grid_clean, train_ran
     # Plot training data
     ax.scatter(x_train_flat, y_train_flat, alpha=0.5, s=30, color='blue', 
                label="Training data", zorder=5, edgecolors='darkblue', linewidths=0.5)
+    
+    # Plot simulated OOD data points if provided
+    if x_ood is not None and y_ood is not None:
+        x_ood_flat = x_ood[:, 0] if np.asarray(x_ood).ndim > 1 else np.asarray(x_ood).ravel()
+        y_ood_flat = y_ood[:, 0] if np.asarray(y_ood).ndim > 1 else np.asarray(y_ood).ravel()
+        if len(x_ood_flat) > 0 and len(y_ood_flat) > 0:
+            ax.scatter(x_ood_flat, y_ood_flat, alpha=0.5, s=30, color='orange',
+                       label="OOD (simulated)", zorder=4, edgecolors='darkorange', linewidths=0.5)
     
     # Handle train_ranges: if provided, use it; otherwise use train_range as single range
     if train_ranges is None:

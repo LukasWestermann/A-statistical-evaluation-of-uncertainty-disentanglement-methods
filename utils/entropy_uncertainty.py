@@ -176,6 +176,35 @@ def entropy_uncertainty_analytical(mu, sigma2):
     }
 
 
+def entropy_uncertainty_analytical_with_epistemic_var(mu, sigma2, eps=1e-10):
+    """
+    Analytical entropy decomposition using full formulas:
+    AU = (1/2)[1 + log(2*pi) + (1/M)*sum_m log(sigma2_m)]
+    EU = (1/2)[log(mean(sigma2)) - (1/M)*sum_m log(sigma2_m)] + Var(mu) / mean(sigma2)
+    TU = AU + EU
+    mu, sigma2 shape (M, N) = (samples, grid).
+    Numerical safety uses sigma2 + eps and mean(sigma2) + eps (no clamping).
+    """
+    mu = np.asarray(mu)
+    sigma2 = np.asarray(sigma2)
+    if mu.ndim == 1:
+        mu = mu.reshape(1, -1)
+    if sigma2.ndim == 1:
+        sigma2 = sigma2.reshape(1, -1)
+    mean_sigma2 = np.mean(sigma2, axis=0)
+    mean_log_sigma2 = np.mean(np.log(sigma2 + eps), axis=0)
+    AU = 0.5 * (1 + np.log(2 * np.pi) + mean_log_sigma2)
+    var_mu = np.var(mu, axis=0)
+    mean_sigma2_safe = mean_sigma2 + eps
+    EU = 0.5 * (np.log(mean_sigma2_safe) - mean_log_sigma2) + var_mu / mean_sigma2_safe
+    TU = AU + EU
+    return {
+        'aleatoric': AU,
+        'epistemic': EU,
+        'total': TU
+    }
+
+
 def entropy_uncertainty_numerical(mu, sigma2, n_samples=5000, seed=None):
     """
     Monte Carlo entropy-based uncertainty decomposition.

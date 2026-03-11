@@ -1,0 +1,45 @@
+% =============================================================================
+% OOD Regression Experiment — Setup (for thesis chapter)
+% =============================================================================
+% Use this as the "Setup" subsubsection content for the OOD regression experiment.
+% Requires: amsmath, amssymb (for \mathcal, \mathbb, etc.). Adjust to your document.
+% =============================================================================
+
+\subsubsection{Setup}
+\label{sec:reg-ood-setup}
+
+\paragraph{Data-generating process.}
+We consider a one-dimensional regression setting where the outcome is generated as
+\begin{equation}
+  Y = f(X) + \varepsilon, \qquad \varepsilon \mid X \sim \mathcal{N}(0, \sigma^2(X)),
+\end{equation}
+with $X \in \mathbb{R}$. Two mean functions are used: a \emph{linear} function $f(x) = 0.7x + 0.5$ and a \emph{nonlinear} function $f(x) = x\sin(x) + x$. Two noise regimes are considered:
+\begin{itemize}
+  \item \textbf{Homoscedastic:} $\sigma(X) = \sigma_0$ with $\sigma_0 = 1$ (constant variance).
+  \item \textbf{Heteroscedastic:} $\sigma(X) = \tau \bigl\lvert \sin(0.5 X + 5) \bigr\rvert$ with $\tau = 2.5$, so that the noise variance varies with $X$.
+\end{itemize}
+
+\paragraph{In-distribution and out-of-distribution regions.}
+Training data are drawn only from an \emph{in-distribution (ID)} input range $\mathcal{X}_{\text{train}} = [-5, 10]$. A separate \emph{out-of-distribution (OOD)} region is defined as $\mathcal{X}_{\text{OOD}} = [10, 15]$; no training points are observed in this interval. The data-generating process (same $f$ and $\sigma(\cdot)$) is identical in both regions, so the OOD regime isolates the effect of \emph{extrapolation} (model uncertainty) rather than a change in the distribution of $Y \mid X$. We use $n = 1000$ training samples and fix the random seed to 42 for reproducibility.
+
+\paragraph{Evaluation grid.}
+Predictions and uncertainties are evaluated on a regular grid of 1000 points spanning from the left endpoint of the training range to the right endpoint of the OOD range, so that the grid covers both ID and OOD regions. Metrics are computed separately on the ID and OOD subsets of this grid, as well as on the full grid (combined).
+
+\paragraph{Models.}
+Four uncertainty-aware regression methods are compared:
+\begin{itemize}
+  \item \textbf{MC Dropout:} Single network with dropout at test time; $\beta$-NLL loss with $\beta = 0.5$, dropout probability $p = 0.25$, 100 Monte Carlo samples at prediction, 500 training epochs, learning rate $10^{-3}$, batch size 32.
+  \item \textbf{Deep Ensemble:} Ensemble of 20 networks with the same architecture; $\beta$-NLL with $\beta = 0.5$, 500 epochs, batch size 32.
+  \item \textbf{Bayesian neural network (BNN):} Bayesian MLP with MCMC (Pyro NUTS); hidden width 16, weight scale 1.0, 200 posterior samples (after 200 warmup steps), single chain.
+  \item \textbf{BAMLSS:} Bayesian additive model for location, scale and shape (R); 12\,000 MCMC iterations with 2\,000 burn-in, thinned by 10, yielding 1\,000 samples for prediction.
+\end{itemize}
+All neural models use input normalization (empirical mean and standard deviation of the training inputs). Aleatoric and epistemic uncertainties are decomposed via the variance-based (mean/variance) formulation; entropy-based decompositions are also computed from the same posterior samples for comparison.
+
+\paragraph{Metrics.}
+For each region (ID, OOD, combined) we report:
+\begin{itemize}
+  \item \textbf{Mean squared error (MSE)} of the predictive mean against the true $f(x)$ on the grid.
+  \item \textbf{Negative log-likelihood (NLL)} and \textbf{CRPS} under a Gaussian predictive distribution with mean $\mu^*$ and variance $\sigma^{*2}$ obtained by aggregating the per-sample means and variances (law of total variance).
+  \item \textbf{Uncertainty disentanglement:} Spearman correlation between the true noise variance $\sigma^2(X)$ and the predicted aleatoric variance (ideal: high positive correlation), and Spearman correlation between absolute prediction error and epistemic variance (ideal: high positive correlation in OOD regions).
+\end{itemize}
+Average aleatoric and epistemic uncertainties (variance or entropy) are normalized to $[0,1]$ per run for comparability across regions; correlations are computed on the raw uncertainty values.

@@ -535,47 +535,41 @@ def fit_bamlss_2d(x_train, z_train, y_train, x_grid, z_grid,
     print(f"Extracting {nsamples} posterior samples...")
     ro.globalenv['nsamples'] = nsamples
     ro.globalenv['n_grid'] = n_grid
+    ro.globalenv['n_iter'] = n_iter
+    ro.globalenv['burnin'] = burnin
+    ro.globalenv['thin'] = thin
     
-    # Use simple prediction approach - get mean predictions
-    # For 2D case, we simplify by getting point estimates
+    # Use fit$samples directly to avoid samples(fit) which calls process.chains() and
+    # expects mcmc objects (fails for 2D model). Apply burnin/thin and support nested list.
     ro.r('''
     mu_pred <- predict(fit, newdata = r_grid, model = "mu", type = "parameter")
     sg_pred <- predict(fit, newdata = r_grid, model = "sigma", type = "parameter")
     
-    # Get samples from chain for uncertainty
-    samps <- samples(fit)
+    samps <- fit$samples
+    if(is.null(samps)) stop("Cannot extract samples: fit$samples is NULL (2D BAMLSS)")
     
-    # Find chain length
-    n_chain <- 0
-    for(i in 1:length(samps)) {
-      if(!is.null(samps[[i]]) && is.matrix(samps[[i]])) {
-        n_chain <- nrow(samps[[i]])
-        break
-      }
+    # Post-burnin and thin: valid row indices into the raw chain
+    valid_idx <- seq(from = as.integer(burnin + 1L), to = as.integer(n_iter), by = as.integer(thin))
+    n_chain <- length(valid_idx)
+    if(n_chain == 0) stop("No samples after burnin and thin; check n_iter, burnin, thin")
+    
+    n_use <- min(nsamples, n_chain)
+    idx_use <- sample(valid_idx, n_use)
+    
+    # Recursive helper: subset every matrix in the tree to one row (for nested fit$samples)
+    subset_samples_row <- function(s, idx) {
+      if(is.matrix(s) || is.data.frame(s)) return(s[idx, , drop = FALSE])
+      if(is.list(s)) return(lapply(s, function(x) subset_samples_row(x, idx)))
+      s
     }
     
-    if(n_chain < nsamples) {
-      n_use <- n_chain
-    } else {
-      n_use <- nsamples
-    }
-    
-    idx_use <- sample(n_chain, n_use)
-    
-    # Simple approach: predict for each sample
     mu_list <- list()
     sg_list <- list()
     
     for(i in 1:n_use) {
-      idx_i <- idx_use[i]
+      actual_row <- idx_use[i]
       fit_i <- fit
-      fit_i$samples <- lapply(samps, function(x) {
-        if(is.matrix(x) && nrow(x) >= idx_i) {
-          x[idx_i, , drop = FALSE]
-        } else {
-          x
-        }
-      })
+      fit_i$samples <- subset_samples_row(samps, actual_row)
       
       mu_pred_i <- predict(fit_i, newdata = r_grid, model = "mu", type = "parameter")
       sg_pred_i <- predict(fit_i, newdata = r_grid, model = "sigma", type = "parameter")

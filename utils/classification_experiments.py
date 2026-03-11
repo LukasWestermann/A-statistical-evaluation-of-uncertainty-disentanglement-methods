@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+import pandas as pd
 
 from utils.classification_data import simulate_dataset, simulate_rotation_ood_dataset, simulate_ring_ood_dataset
 from utils.classification_models import (
@@ -30,7 +31,10 @@ from utils.classification_models import (
 )
 from utils.classification_metrics import accuracy_from_probs, expected_calibration_error, roc_auc_score_manual
 from utils.classification_plotting import plot_metric_curves, plot_uncertainty_heatmap, plot_misclassifications, plot_uncertainty_panel
-from utils.results_save import save_statistics, save_classification_outputs
+from utils.results_save import save_statistics, save_classification_outputs, save_combined_classification_excel
+
+# Module-level accumulator for combined classification Excel (experiment_type -> model_name -> DataFrame)
+_accumulated_classification_stats: Dict[str, Dict[str, pd.DataFrame]] = {}
 
 
 # ============================================================================
@@ -687,6 +691,14 @@ def _save_sweep_summary(
                       f"{model_name} AU-EU correlation vs {condition_name}", condition_name, subfolder)
     
     save_statistics(summary, f"{model_name}_{condition_name}_summary", subfolder=subfolder)
+    
+    # Accumulate for combined Excel (experiment_type from subfolder, e.g. "classification/undersampling/mc_dropout_it" -> "undersampling")
+    parts = subfolder.split("/")
+    experiment_type = parts[1] if len(parts) > 1 else "classification"
+    if experiment_type not in _accumulated_classification_stats:
+        _accumulated_classification_stats[experiment_type] = {}
+    summary_df = pd.DataFrame(summary)
+    _accumulated_classification_stats[experiment_type][model_name] = summary_df
     
     return summary
 
@@ -3095,3 +3107,24 @@ def run_ring_ood_experiment(cfg: Dict[str, Any], model_type: str) -> Dict[str, A
         return run_bnn_gl_ring_ood_experiment(cfg)
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
+
+
+def save_all_classification_statistics(experiment_type: str, date=None):
+    """
+    Save combined classification Excel for the given experiment type.
+    Call this after running all models for that experiment (e.g. after all
+    undersampling or sample_size model runs) so that one workbook is written
+    with one sheet per model.
+    
+    experiment_type: one of 'undersampling', 'sample_size', 'label_noise', 'rcd'
+    date: optional YYYYMMDD string for filename prefix
+    """
+    if experiment_type not in _accumulated_classification_stats:
+        print(f"No accumulated classification stats for experiment_type={experiment_type}. Run model experiments first.")
+        return None
+    return save_combined_classification_excel(
+        _accumulated_classification_stats[experiment_type],
+        experiment_type,
+        date=date,
+        subfolder="",
+    )

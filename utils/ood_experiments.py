@@ -161,9 +161,13 @@ def generate_data_with_ood(generate_toy_regression_func, n_train, train_range, o
         
         result = generate_toy_regression_func(**call_kwargs)
         
-        # Check if result has 5 values (new signature) or 4 values (old signature)
+        # Check if result has 5 values, 7 values (with x_ood, y_ood), or 4 values (old signature)
         if len(result) == 5:
             x_train, y_train, x_grid, y_grid_clean, ood_mask = result
+            return (x_train.astype(np.float32), y_train.astype(np.float32),
+                    x_grid.astype(np.float32), y_grid_clean.astype(np.float32), ood_mask)
+        elif len(result) == 7:
+            x_train, y_train, x_grid, y_grid_clean, ood_mask, x_ood, y_ood = result
             return (x_train.astype(np.float32), y_train.astype(np.float32),
                     x_grid.astype(np.float32), y_grid_clean.astype(np.float32), ood_mask)
         elif len(result) == 4:
