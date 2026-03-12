@@ -557,7 +557,7 @@ def compute_and_save_statistics_undersampling(
         print_line = f"{region_name:<15} {density_factor:<12.2f} {avg_ale_norm:>19.6f}  {avg_epi_norm:>19.6f}  {avg_tot_norm:>19.6f}  {correlation:>14.6f}  {mse:>14.6f} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
         print(print_line)
         
-        # Save statistics for this region (don't save individual files, accumulate for combined Excel)
+        # Save statistics for this region (also save individual Excel, and accumulate for combined Excel)
         stats_df, fig = save_summary_statistics_undersampling(
             [avg_ale_norm], [avg_epi_norm], [avg_tot_norm], [correlation], [mse],
             function_name, noise_type=noise_type,
@@ -568,7 +568,7 @@ def compute_and_save_statistics_undersampling(
             crps_list=[crps_val] if crps_val is not None else None,
             spearman_aleatoric_list=[spear_ale_val] if spear_ale_val is not None else None,
             spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None,
-            save_individual=False
+            save_individual=True
         )
         
         # Accumulate statistics for combined Excel file
@@ -641,7 +641,7 @@ def compute_and_save_statistics_undersampling(
         print(f"{'Undersampled':<20} {avg_undersampled_ale:>19.6f}  {avg_undersampled_epi:>19.6f}  {avg_undersampled_tot:>19.6f}  {corr_undersampled:>14.6f}  {undersampled_mse:>14.6f}")
         print(f"{'Well-sampled':<20} {avg_well_sampled_ale:>19.6f}  {avg_well_sampled_epi:>19.6f}  {avg_well_sampled_tot:>19.6f}  {corr_well_sampled:>14.6f}  {well_sampled_mse:>14.6f}")
         
-        # Save comparison statistics (accumulate for combined Excel)
+        # Save comparison statistics (also save individual Excel, and accumulate for combined Excel)
         for region_name, stats in [('Undersampled', (avg_undersampled_ale, avg_undersampled_epi, avg_undersampled_tot, corr_undersampled, undersampled_mse)),
                                    ('Well_sampled', (avg_well_sampled_ale, avg_well_sampled_epi, avg_well_sampled_tot, corr_well_sampled, well_sampled_mse))]:
             stats_df, fig = save_summary_statistics_undersampling(
@@ -649,7 +649,7 @@ def compute_and_save_statistics_undersampling(
                 function_name, noise_type=noise_type,
                 func_type=func_type, model_name=model_name, region_name=region_name,
                 date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
-                save_individual=False
+                save_individual=True
             )
             
             # Accumulate statistics
@@ -685,13 +685,13 @@ def compute_and_save_statistics_undersampling(
     print("-" * 140)
     print(f"{'Overall':<15} {avg_ale_overall:>19.6f}  {avg_epi_overall:>19.6f}  {avg_tot_overall:>19.6f}  {corr_overall:>14.6f}  {overall_mse:>14.6f}")
     
-    # Save overall statistics (accumulate for combined Excel)
+    # Save overall statistics (also save individual Excel, and accumulate for combined Excel)
     stats_df, fig = save_summary_statistics_undersampling(
         [avg_ale_overall], [avg_epi_overall], [avg_tot_overall], [corr_overall], [overall_mse],
         function_name, noise_type=noise_type,
         func_type=func_type, model_name=model_name, region_name='Overall',
         date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
-        save_individual=False
+        save_individual=True
     )
     
     # Accumulate statistics
@@ -817,14 +817,14 @@ def compute_and_save_statistics_entropy_undersampling(
         
         print(f"{region_name:<15} {density_factor:<12.2f} {avg_ale_entropy_norm:>19.6f}  {avg_epi_entropy_norm:>19.6f}  {avg_tot_entropy_norm:>19.6f}  {correlation:>14.6f}  {mse:>14.6f}")
         
-        # Save normalized statistics for this region (accumulate for combined Excel)
+        # Save normalized statistics for this region (also save individual Excel, and accumulate for combined Excel)
         stats_df, fig = save_summary_statistics_entropy_undersampling(
             [avg_ale_entropy_norm], [avg_epi_entropy_norm], [avg_tot_entropy_norm], [correlation], [mse],
             function_name, noise_type=noise_type,
             func_type=func_type, model_name=model_name, region_name=region_name,
             date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
             density_factor=density_factor,
-            save_individual=False
+            save_individual=True
         )
         
         # Accumulate statistics for combined Excel file
@@ -895,7 +895,7 @@ def compute_and_save_statistics_entropy_undersampling(
         print(f"{'Undersampled':<20} {avg_undersampled_ale:>19.6f}  {avg_undersampled_epi:>19.6f}  {avg_undersampled_tot:>19.6f}  {corr_undersampled:>14.6f}  {undersampled_mse:>14.6f}")
         print(f"{'Well-sampled':<20} {avg_well_sampled_ale:>19.6f}  {avg_well_sampled_epi:>19.6f}  {avg_well_sampled_tot:>19.6f}  {corr_well_sampled:>14.6f}  {well_sampled_mse:>14.6f}")
         
-        # Save comparison statistics (accumulate for combined Excel)
+        # Save comparison statistics (also save individual Excel, and accumulate for combined Excel)
         for region_name, stats in [('Undersampled', (avg_undersampled_ale, avg_undersampled_epi, avg_undersampled_tot, corr_undersampled, undersampled_mse)),
                                    ('Well_sampled', (avg_well_sampled_ale, avg_well_sampled_epi, avg_well_sampled_tot, corr_well_sampled, well_sampled_mse))]:
             stats_df, fig = save_summary_statistics_entropy_undersampling(
@@ -903,7 +903,7 @@ def compute_and_save_statistics_entropy_undersampling(
                 function_name, noise_type=noise_type,
                 func_type=func_type, model_name=model_name, region_name=region_name,
                 date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
-                save_individual=False
+                save_individual=True
             )
             
             # Accumulate statistics
@@ -940,13 +940,13 @@ def compute_and_save_statistics_entropy_undersampling(
     print("-" * 140)
     print(f"{'Overall':<15} {avg_ale_overall:>19.6f}  {avg_epi_overall:>19.6f}  {avg_tot_overall:>19.6f}  {corr_overall:>14.6f}  {overall_mse:>14.6f}")
     
-    # Save overall statistics (accumulate for combined Excel)
+    # Save overall statistics (also save individual Excel, and accumulate for combined Excel)
     stats_df, fig = save_summary_statistics_entropy_undersampling(
         [avg_ale_overall], [avg_epi_overall], [avg_tot_overall], [corr_overall], [overall_mse],
         function_name, noise_type=noise_type,
         func_type=func_type, model_name=model_name, region_name='Overall',
         date=date, dropout_p=dropout_p, mc_samples=mc_samples, n_nets=n_nets,
-        save_individual=False
+        save_individual=True
     )
     
     # Accumulate statistics

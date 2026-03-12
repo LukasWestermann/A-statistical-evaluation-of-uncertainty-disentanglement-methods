@@ -1058,7 +1058,7 @@ def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list,
     
     # Build filename with optional date and model parameters
     density_str = f"_density{density_factor}" if density_factor is not None else ""
-    base_filename = f"{region_name}{density_str}_uncertainties_summary_{function_name}_{noise_type}"
+    base_filename = f"{region_name}{density_str}_uncertainties_summary_{function_name}_{noise_type}_variance"
     
     # Build parameter strings
     param_parts = []
