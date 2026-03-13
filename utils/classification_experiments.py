@@ -124,8 +124,33 @@ def gl_uncertainty(
 
 
 def _predictive_probs_it(probs_members: np.ndarray) -> np.ndarray:
-    """Get predictive probabilities from IT model members."""
-    return probs_members.mean(axis=0)
+    """Get predictive probabilities from IT model members.
+
+    Supports inputs with shapes:
+      - [N, K]: already predictive probabilities
+      - [S, N, K]: S member predictions (e.g. MC samples, ensemble members)
+      - [C, S, N, K] or similar: multiple leading sample dimensions
+    and always returns an array of shape [N, K].
+    """
+    probs_members = np.asarray(probs_members)
+
+    # If already [N, K], return as-is
+    if probs_members.ndim == 2:
+        return probs_members
+
+    # If there are sample/chain dimensions, average over all leading dims
+    if probs_members.ndim >= 3:
+        # Treat the last two dims as [N, K]; collapse any leading dims into one
+        leading_dim = int(np.prod(probs_members.shape[:-2]))
+        n_points, n_classes = probs_members.shape[-2], probs_members.shape[-1]
+        probs_flat = probs_members.reshape(leading_dim, n_points, n_classes)
+        return probs_flat.mean(axis=0)
+
+    # Fallback for 1D inputs (single point, K classes)
+    if probs_members.ndim == 1:
+        return probs_members[None, :]
+
+    return probs_members
 
 
 def _predictive_probs_gl(mu_members: np.ndarray, sigma2_members: np.ndarray, n_samples: int = 100) -> np.ndarray:
@@ -142,6 +167,22 @@ def _evaluate_probs(probs: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
     
     Filters out OOD samples (label == -1) before computing metrics.
     """
+    probs = np.asarray(probs)
+    y_true = np.asarray(y_true)
+
+    # Ensure probs has shape [N, K] before masking
+    if probs.ndim > 2:
+        # Collapse all but the last dimension, assume last dim is classes
+        n_points = int(np.prod(probs.shape[:-1]))
+        n_classes = probs.shape[-1]
+        probs = probs.reshape(n_points, n_classes)
+    elif probs.ndim == 1:
+        probs = probs.reshape(-1, 1)
+
+    # If first dim does not match y_true but the second does, transpose
+    if probs.shape[0] != y_true.shape[0] and probs.ndim == 2 and probs.shape[1] == y_true.shape[0]:
+        probs = probs.T
+
     # Filter out OOD samples (label == -1)
     valid_mask = y_true >= 0
     if not np.any(valid_mask):
