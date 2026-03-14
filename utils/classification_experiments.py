@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Dict, Any, List
 from pathlib import Path
 from datetime import datetime
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -182,6 +183,15 @@ def _evaluate_probs(probs: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
     # If first dim does not match y_true but the second does, transpose
     if probs.shape[0] != y_true.shape[0] and probs.ndim == 2 and probs.shape[1] == y_true.shape[0]:
         probs = probs.T
+
+    # Guard: probs must have one row per label (e.g. BNN/Pyro can sometimes return wrong shape)
+    if probs.shape[0] != y_true.shape[0]:
+        warnings.warn(
+            f"_evaluate_probs: probs shape {probs.shape} does not match y_true length {y_true.shape[0]}; returning default metrics.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return {"accuracy": 0.0, "ece": 0.0}
 
     # Filter out OOD samples (label == -1)
     valid_mask = y_true >= 0
