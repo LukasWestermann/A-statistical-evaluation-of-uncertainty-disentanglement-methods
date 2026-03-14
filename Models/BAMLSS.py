@@ -548,11 +548,15 @@ def fit_bamlss_2d(x_train, z_train, y_train, x_grid, z_grid,
     samps <- fit$samples
     if(is.null(samps)) stop("Cannot extract samples: fit$samples is NULL (2D BAMLSS)")
     
-    # Post-burnin and thin: valid row indices into the raw chain
-    valid_idx <- seq(from = as.integer(burnin + 1L), to = as.integer(n_iter), by = as.integer(thin))
-    n_chain <- length(valid_idx)
-    if(n_chain == 0) stop("No samples after burnin and thin; check n_iter, burnin, thin")
-    
+    # bamlss stores only (n_iter - burnin) / thin rows; use 1-based row indices into stored chain
+    get_chain_length <- function(s) {
+      if(is.matrix(s) || is.data.frame(s)) return(nrow(s))
+      if(is.list(s) && length(s) > 0) return(get_chain_length(s[[1]]))
+      NULL
+    }
+    n_chain <- get_chain_length(samps)
+    if(is.null(n_chain) || n_chain == 0) stop("No samples after burnin and thin; check n_iter, burnin, thin")
+    valid_idx <- seq_len(n_chain)
     n_use <- min(nsamples, n_chain)
     idx_use <- sample(valid_idx, n_use)
     
