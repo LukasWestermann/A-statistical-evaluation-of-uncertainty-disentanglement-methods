@@ -7,6 +7,9 @@ handling the pattern of:
 2. Training models on X only (omitting Z)
 3. Collecting uncertainties (variance and entropy-based)
 4. Computing and saving statistics
+
+Per-configuration .npz files from save_ovb_model_outputs support offline recomputation
+of variance/entropy decompositions from raw mu_samples / sigma2_samples.
 """
 
 import numpy as np
@@ -21,6 +24,7 @@ import pandas as pd
 from pathlib import Path
 
 from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
+from utils.results_save import sanitize_filename
 from utils.device import get_device_for_worker, get_num_gpus
 from utils.plotting import (
     plot_uncertainties_no_ood,
@@ -236,52 +240,126 @@ def _train_single_ovb_config(args):
 # Save Functions
 # ============================================================================
 
-def save_ovb_model_outputs(X, Z, Y, x_grid, y_grid_clean, mu_pred, mu_samples, sigma2_samples,
-                           ale_var, epi_var, tot_var, ale_entropy, epi_entropy, tot_entropy,
-                           rho, beta2, func_type, noise_type, results_dir, param_name='rho'):
+def _bamlss_member_first(mu_samples, sigma2_samples, model_name: str, n_points: int):
     """
-    Save all OVB model outputs for later reuse.
-    
-    Parameters:
-    -----------
-    X, Z, Y : np.ndarray
-        Training data (X observed, Z latent/omitted, Y outcome)
-    x_grid, y_grid_clean : np.ndarray
-        Evaluation grid
-    mu_pred, mu_samples, sigma2_samples : np.ndarray
-        Raw model predictions
-    ale_var, epi_var, tot_var : np.ndarray
-        Variance decomposition
-    ale_entropy, epi_entropy, tot_entropy : np.ndarray
-        Entropy (IT) decomposition
-    rho, beta2 : float
-        OVB parameters
-    func_type, noise_type : str
-        Experiment configuration
-    results_dir : Path
-        Directory to save outputs
-    param_name : str
-        'rho' or 'beta2' - which parameter is being varied
+    If BAMLSS returned (N_points, S), transpose to (S, N_points) for offline tools.
+    Same rule as save_model_outputs for BAMLSS.
+    """
+    if model_name != 'BAMLSS' or mu_samples is None:
+        return mu_samples, sigma2_samples
+    mu = np.asarray(mu_samples)
+    sig = np.asarray(sigma2_samples)
+    if mu.ndim == 2 and mu.shape[0] != mu.shape[1]:
+        if mu.shape[1] < mu.shape[0] and n_points == mu.shape[0]:
+            return mu.T, sig.T
+    return mu, sig
+
+
+def save_ovb_model_outputs(
+    X,
+    Z,
+    Y,
+    x_grid,
+    y_grid_clean,
+    mu_pred,
+    mu_samples,
+    sigma2_samples,
+    ale_var,
+    epi_var,
+    tot_var,
+    ale_entropy,
+    epi_entropy,
+    tot_entropy,
+    rho,
+    beta2,
+    func_type,
+    noise_type,
+    results_dir,
+    param_name: str = 'rho',
+    model_name: str = 'MC_Dropout',
+    entropy_method: str = 'analytical',
+    mu_samples_full=None,
+    sigma2_samples_full=None,
+    X_full=None,
+    mu_samples_2d=None,
+    sigma2_samples_2d=None,
+    X_grid_2d=None,
+    Z_grid_2d=None,
+):
+    """
+    Save OVB model outputs for offline recomputation (variance / entropy from raw members).
+
+    Core keys (always written):
+        X, Z, Y, x_grid, y_grid_clean, mu_pred, mu_samples, sigma2_samples,
+        ale_var, epi_var, tot_var, ale_entropy, epi_entropy, tot_entropy,
+        rho, beta2, func_type, noise_type (as 0-d object arrays where strings),
+        model_name, entropy_method, param_name.
+
+    Optional keys (only if not None):
+        mu_samples_full, sigma2_samples_full, X_full — full model on training (X, Z).
+        mu_samples_2d, sigma2_samples_2d, X_grid_2d, Z_grid_2d — 2D heatmap grid.
+
+    For model_name=='BAMLSS', mu/sigma arrays are transposed to (S, N) when they
+    arrive as (N, S) with N grid/training points.
     """
     date = datetime.now().strftime('%Y%m%d')
-    
+    safe_model = sanitize_filename(model_name)
+
     if param_name == 'rho':
-        filename = f"ovb_outputs_rho{rho:.2f}_beta2{beta2:.2f}_{date}.npz"
+        filename = f"ovb_outputs_{safe_model}_rho{rho:.2f}_beta2{beta2:.2f}_{date}.npz"
     else:
-        filename = f"ovb_outputs_beta2{beta2:.2f}_rho{rho:.2f}_{date}.npz"
-    
-    filepath = results_dir / filename
-    
-    np.savez_compressed(
-        filepath,
-        X=X, Z=Z, Y=Y,
-        x_grid=x_grid, y_grid_clean=y_grid_clean,
-        mu_pred=mu_pred, mu_samples=mu_samples, sigma2_samples=sigma2_samples,
-        ale_var=ale_var, epi_var=epi_var, tot_var=tot_var,
-        ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
-        rho=np.array([rho]), beta2=np.array([beta2]),
-        func_type=np.array([func_type]), noise_type=np.array([noise_type])
-    )
+        filename = f"ovb_outputs_{safe_model}_beta2{beta2:.2f}_rho{rho:.2f}_{date}.npz"
+
+    filepath = Path(results_dir) / filename
+    n_grid = int(np.asarray(x_grid).ravel().shape[0])
+    mu_s, sig_s = _bamlss_member_first(mu_samples, sigma2_samples, model_name, n_grid)
+
+    save_dict = {
+        'X': X,
+        'Z': Z,
+        'Y': Y,
+        'x_grid': x_grid,
+        'y_grid_clean': y_grid_clean,
+        'mu_pred': mu_pred,
+        'mu_samples': mu_s,
+        'sigma2_samples': sig_s,
+        'ale_var': ale_var,
+        'epi_var': epi_var,
+        'tot_var': tot_var,
+        'ale_entropy': ale_entropy,
+        'epi_entropy': epi_entropy,
+        'tot_entropy': tot_entropy,
+        'rho': np.array([rho], dtype=np.float64),
+        'beta2': np.array([beta2], dtype=np.float64),
+        'func_type': np.array([func_type], dtype=object),
+        'noise_type': np.array([noise_type], dtype=object),
+        'model_name': np.array([model_name], dtype=object),
+        'entropy_method': np.array([entropy_method], dtype=object),
+        'param_name': np.array([param_name], dtype=object),
+    }
+
+    if mu_samples_full is not None and sigma2_samples_full is not None:
+        n_full = int(np.asarray(Y).shape[0])
+        mf, sf = _bamlss_member_first(mu_samples_full, sigma2_samples_full, model_name, n_full)
+        save_dict['mu_samples_full'] = mf
+        save_dict['sigma2_samples_full'] = sf
+        if X_full is not None:
+            save_dict['X_full'] = X_full
+
+    if (
+        mu_samples_2d is not None
+        and sigma2_samples_2d is not None
+        and X_grid_2d is not None
+        and Z_grid_2d is not None
+    ):
+        n2 = int(np.asarray(X_grid_2d).size)
+        m2, s2 = _bamlss_member_first(mu_samples_2d, sigma2_samples_2d, model_name, n2)
+        save_dict['mu_samples_2d'] = m2
+        save_dict['sigma2_samples_2d'] = s2
+        save_dict['X_grid_2d'] = X_grid_2d
+        save_dict['Z_grid_2d'] = Z_grid_2d
+
+    np.savez_compressed(filepath, **save_dict)
     print(f"  Saved model outputs to: {filepath}")
 
 
@@ -661,7 +739,8 @@ def run_mc_dropout_ovb_rho_experiment(
                 ale_var=ale_var, epi_var=epi_var, tot_var=tot_var,
                 ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
                 rho=rho, beta2=beta2, func_type=func_type, noise_type=noise_type,
-                results_dir=save_dir, param_name='rho'
+                results_dir=save_dir, param_name='rho',
+                model_name='MC_Dropout', entropy_method=entropy_method,
             )
     
     results_df = pd.DataFrame(summary_rows)
@@ -1052,15 +1131,16 @@ def run_mc_dropout_ovb_beta2_experiment(
                 ale_var=ale_var, epi_var=epi_var, tot_var=tot_var,
                 ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
                 rho=rho, beta2=beta2_val, func_type=func_type, noise_type=noise_type,
-                results_dir=save_dir, param_name='beta2'
+                results_dir=save_dir, param_name='beta2',
+                model_name='MC_Dropout', entropy_method=entropy_method,
             )
-    
+
     results_df = pd.DataFrame(summary_rows)
-    
+
     # Generate summary plots
     if save_plots:
         _plot_ovb_experiment_results(results_df, all_results, 'beta2', rho, func_type, noise_type, save_dir)
-    
+
     # Save summary stats to Excel
     if save_dir:
         date = datetime.now().strftime('%Y%m%d')
@@ -1292,6 +1372,21 @@ def run_deep_ensemble_ovb_rho_experiment(
         print(f"  [Full]    MSE: {mse_full:.4f}")
         print(f"  [Full]    Variance - AU: {mean_ale_var_full:.4f}, EU: {mean_epi_var_full:.4f}")
         print(f"  Inflation (Var) - AU: {au_inflation_var:+.2%}, EU: {eu_inflation_var:+.2%}")
+
+        if save_dir:
+            save_ovb_model_outputs(
+                X=X, Z=Z, Y=Y, x_grid=x_grid, y_grid_clean=y_grid_clean,
+                mu_pred=mu_pred, mu_samples=mu_samples, sigma2_samples=sigma2_samples,
+                ale_var=ale_var, epi_var=epi_var, tot_var=tot_var,
+                ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                rho=rho, beta2=beta2, func_type=func_type, noise_type=noise_type,
+                results_dir=save_dir, param_name='rho',
+                model_name='Deep_Ensemble', entropy_method=entropy_method,
+                mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
+                X_full=X_full,
+                mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
+                X_grid_2d=X_grid_2d, Z_grid_2d=Z_grid_2d,
+            )
     
     results_df = pd.DataFrame(summary_rows)
     
@@ -1499,6 +1594,21 @@ def run_deep_ensemble_ovb_beta2_experiment(
         print(f"  [Omitted] MSE: {mse:.4f}")
         print(f"  [Full]    MSE: {mse_full:.4f}")
         print(f"  Inflation (Var) - AU: {au_inflation_var:+.2%}, EU: {eu_inflation_var:+.2%}")
+
+        if save_dir:
+            save_ovb_model_outputs(
+                X=X, Z=Z, Y=Y, x_grid=x_grid, y_grid_clean=y_grid_clean,
+                mu_pred=mu_pred, mu_samples=mu_samples, sigma2_samples=sigma2_samples,
+                ale_var=ale_var, epi_var=epi_var, tot_var=tot_var,
+                ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                rho=rho, beta2=beta2_val, func_type=func_type, noise_type=noise_type,
+                results_dir=save_dir, param_name='beta2',
+                model_name='Deep_Ensemble', entropy_method=entropy_method,
+                mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
+                X_full=X_full,
+                mu_samples_2d=result_2d[4][0], sigma2_samples_2d=result_2d[4][1],
+                X_grid_2d=X_grid_2d, Z_grid_2d=Z_grid_2d,
+            )
     
     results_df = pd.DataFrame(summary_rows)
     
@@ -1715,12 +1825,27 @@ def run_bnn_ovb_rho_experiment(
         print(f"  [Full]    MSE: {mse_full:.4f}")
         print(f"  [Full]    Variance - AU: {mean_ale_var_full:.4f}, EU: {mean_epi_var_full:.4f}")
         print(f"  Inflation (Var) - AU: {au_inflation_var:+.2%}, EU: {eu_inflation_var:+.2%}")
-    
+
+        if save_dir:
+            save_ovb_model_outputs(
+                X=X, Z=Z, Y=Y, x_grid=x_grid, y_grid_clean=y_grid_clean,
+                mu_pred=mu_pred, mu_samples=mu_samples, sigma2_samples=sigma2_samples,
+                ale_var=ale_var, epi_var=epi_var, tot_var=tot_var,
+                ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                rho=rho, beta2=beta2, func_type=func_type, noise_type=noise_type,
+                results_dir=save_dir, param_name='rho',
+                model_name='BNN', entropy_method=entropy_method,
+                mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
+                X_full=X_full,
+                mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
+                X_grid_2d=X_grid_2d, Z_grid_2d=Z_grid_2d,
+            )
+
     results_df = pd.DataFrame(summary_rows)
-    
+
     if save_plots:
         _plot_ovb_experiment_results(results_df, all_results, 'rho', beta2, func_type, noise_type, save_dir)
-    
+
     if save_dir:
         date = datetime.now().strftime('%Y%m%d')
         excel_path = save_dir / f"bnn_ovb_rho_stats_{date}.xlsx"
@@ -1925,6 +2050,21 @@ def run_bnn_ovb_beta2_experiment(
         print(f"  [Omitted] MSE: {mse:.4f}")
         print(f"  [Full]    MSE: {mse_full:.4f}")
         print(f"  Inflation (Var) - AU: {au_inflation_var:+.2%}, EU: {eu_inflation_var:+.2%}")
+
+        if save_dir:
+            save_ovb_model_outputs(
+                X=X, Z=Z, Y=Y, x_grid=x_grid, y_grid_clean=y_grid_clean,
+                mu_pred=mu_pred, mu_samples=mu_samples, sigma2_samples=sigma2_samples,
+                ale_var=ale_var, epi_var=epi_var, tot_var=tot_var,
+                ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                rho=rho, beta2=beta2_val, func_type=func_type, noise_type=noise_type,
+                results_dir=save_dir, param_name='beta2',
+                model_name='BNN', entropy_method=entropy_method,
+                mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
+                X_full=X_full,
+                mu_samples_2d=result_2d[4][0], sigma2_samples_2d=result_2d[4][1],
+                X_grid_2d=X_grid_2d, Z_grid_2d=Z_grid_2d,
+            )
     
     results_df = pd.DataFrame(summary_rows)
     
@@ -2132,6 +2272,22 @@ def run_bamlss_ovb_rho_experiment(
         print(f"  [Full]    MSE: {mse_full:.4f}")
         print(f"  [Full]    Variance - AU: {mean_ale_var_full:.4f}, EU: {mean_epi_var_full:.4f}")
         print(f"  Inflation (Var) - AU: {au_inflation_var:+.2%}, EU: {eu_inflation_var:+.2%}")
+
+        if save_dir:
+            X_full_ovb = np.hstack([X, Z.reshape(-1, 1)]).astype(np.float32)
+            save_ovb_model_outputs(
+                X=X, Z=Z, Y=Y, x_grid=x_grid, y_grid_clean=y_grid_clean,
+                mu_pred=mu_pred, mu_samples=mu_samples, sigma2_samples=sigma2_samples,
+                ale_var=ale_var, epi_var=epi_var, tot_var=tot_var,
+                ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                rho=rho, beta2=beta2, func_type=func_type, noise_type=noise_type,
+                results_dir=save_dir, param_name='rho',
+                model_name='BAMLSS', entropy_method=entropy_method,
+                mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
+                X_full=X_full_ovb,
+                mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
+                X_grid_2d=X_grid_2d, Z_grid_2d=Z_grid_2d,
+            )
     
     results_df = pd.DataFrame(summary_rows)
     
@@ -2333,12 +2489,28 @@ def run_bamlss_ovb_beta2_experiment(
         print(f"  [Omitted] MSE: {mse:.4f}")
         print(f"  [Full]    MSE: {mse_full:.4f}")
         print(f"  Inflation (Var) - AU: {au_inflation_var:+.2%}, EU: {eu_inflation_var:+.2%}")
-    
+
+        if save_dir:
+            X_full_ovb = np.hstack([X, Z.reshape(-1, 1)]).astype(np.float32)
+            save_ovb_model_outputs(
+                X=X, Z=Z, Y=Y, x_grid=x_grid, y_grid_clean=y_grid_clean,
+                mu_pred=mu_pred, mu_samples=mu_samples, sigma2_samples=sigma2_samples,
+                ale_var=ale_var, epi_var=epi_var, tot_var=tot_var,
+                ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
+                rho=rho, beta2=beta2_val, func_type=func_type, noise_type=noise_type,
+                results_dir=save_dir, param_name='beta2',
+                model_name='BAMLSS', entropy_method=entropy_method,
+                mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
+                X_full=X_full_ovb,
+                mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
+                X_grid_2d=X_grid_2d, Z_grid_2d=Z_grid_2d,
+            )
+
     results_df = pd.DataFrame(summary_rows)
-    
+
     if save_plots:
         _plot_ovb_experiment_results(results_df, all_results, 'beta2', rho, func_type, noise_type, save_dir)
-    
+
     if save_dir:
         date = datetime.now().strftime('%Y%m%d')
         excel_path = save_dir / f"bamlss_ovb_beta2_stats_{date}.xlsx"

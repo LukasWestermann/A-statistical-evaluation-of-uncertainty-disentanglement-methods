@@ -33,9 +33,9 @@ Thumbs.db
 *.xls
 
 # Numpy / model output blobs
-*.npz
-*.npy
+##*.npz
+##*.npy
 
 # Results directories (optional: keep LaTeX, ignore heavy artefacts via extensions above)
-results/**/outputs/
+#results/**/outputs/
 
