@@ -1,12 +1,15 @@
 """Smoke tests for k-NN entropy recomputation helpers."""
 
+import importlib.util
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from utils.knn_entropy_regression import (
     build_ood_mask,
     collect_raw_npz_files,
+    compute_numerical_grid_result,
     ensure_samples_first,
     is_ovb_or_non_raw_path,
 )
@@ -59,3 +62,49 @@ def test_synthetic_npz_layout_and_ood_mask(tmp_path):
     assert mu.shape[0] == s_mem
     m = build_ood_mask(xg, [(0.0, 0.0)])
     assert m.shape == (n_grid,)
+
+
+def test_compute_numerical_grid_result_smoke(tmp_path):
+    """Tiny npz: numerical mixture entropy returns finite vectors."""
+    rng = np.random.default_rng(0)
+    n_grid = 8
+    s_mem = 3
+    npz_path = tmp_path / "tiny_BAMLSS_raw_outputs.npz"
+    np.savez(
+        npz_path,
+        mu_samples=rng.standard_normal((s_mem, n_grid)).astype(np.float64),
+        sigma2_samples=(np.abs(rng.standard_normal((s_mem, n_grid))) + 0.01).astype(np.float64),
+        x_grid=np.linspace(-1, 1, n_grid).reshape(-1, 1),
+        y_grid_clean=rng.standard_normal((n_grid, 1)),
+        model_name=np.array(["BAMLSS"], dtype=object),
+    )
+    res = compute_numerical_grid_result(
+        npz_path, n_samples=32, base_seed=42, ood_ranges=[(0.5, 1.0)], grid_stride=1, grid_chunk_size=4
+    )
+    assert res.ale_entropy.shape == (n_grid,)
+    assert res.epi_entropy.shape == (n_grid,)
+    assert res.tot_entropy.shape == (n_grid,)
+    assert np.all(np.isfinite(res.ale_entropy))
+    assert np.all(np.isfinite(res.epi_entropy))
+    assert np.all(np.isfinite(res.tot_entropy))
+
+
+def _load_recompute_knn_script():
+    root = Path(__file__).resolve().parent.parent
+    path = root / "scripts" / "recompute_entropy_knn_from_npz.py"
+    spec = importlib.util.spec_from_file_location("recompute_entropy_knn_from_npz", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_parse_model_tags_filter():
+    m = _load_recompute_knn_script()
+    assert m.parse_model_tags_filter(None) is None
+    assert m.parse_model_tags_filter("") is None
+    assert m.parse_model_tags_filter("  ") is None
+    assert m.parse_model_tags_filter("MC_Dropout") == {"MC_Dropout"}
+    assert m.parse_model_tags_filter("mc_dropout, BNN") == {"MC_Dropout", "BNN"}
+    with pytest.raises(ValueError, match="Unknown model"):
+        m.parse_model_tags_filter("NotAModel")

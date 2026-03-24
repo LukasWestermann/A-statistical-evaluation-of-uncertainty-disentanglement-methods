@@ -196,3 +196,34 @@ class TestEntropyUncertaintyNumerical:
         # Both should be in reasonable range (entropy should be positive)
         # The methods may differ significantly for mixtures, so we just check they're valid
 
+    def test_grid_chunk_size_equivalent_to_full(self):
+        """Chunked mixture log-pdf path matches a single wide chunk for identical RNG."""
+        M, N = 7, 13
+        mu = np.random.RandomState(0).randn(M, N)
+        sigma2 = np.random.RandomState(1).rand(M, N) ** 2 + 0.1
+        n_samples = 64
+        seed = 123
+
+        a = entropy_uncertainty_numerical(
+            mu, sigma2, n_samples=n_samples, seed=seed, grid_chunk_size=1
+        )
+        b = entropy_uncertainty_numerical(
+            mu, sigma2, n_samples=n_samples, seed=seed, grid_chunk_size=10_000
+        )
+
+        for key in ["aleatoric", "epistemic", "total"]:
+            assert np.allclose(a[key], b[key], rtol=1e-12, atol=1e-12)
+
+    def test_large_grid_chunked_runs(self):
+        """Moderate M x N with small grid chunks completes and stays finite."""
+        M, N = 200, 300
+        rng = np.random.default_rng(2)
+        mu = rng.standard_normal((M, N))
+        sigma2 = rng.random((M, N)) ** 2 + 0.1
+        result = entropy_uncertainty_numerical(
+            mu, sigma2, n_samples=50, seed=42, grid_chunk_size=5
+        )
+        for key in ["aleatoric", "epistemic", "total"]:
+            assert result[key].shape == (N,)
+            assert np.all(np.isfinite(result[key]))
+

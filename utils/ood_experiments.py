@@ -800,7 +800,7 @@ def run_mc_dropout_ood_experiment(
     batch_size: int = 32,
     mc_samples: int = 100,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'numerical'
 ):
     """
     Run OOD experiment for MC Dropout model.
@@ -1107,7 +1107,7 @@ def run_deep_ensemble_ood_experiment(
     K: int = 20,
     epochs: int = 500,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'numerical'
 ):
     """
     Run OOD experiment for Deep Ensemble model.
@@ -1414,7 +1414,7 @@ def run_bnn_ood_experiment(
     samples: int = 200,
     chains: int = 1,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'numerical'
 ):
     """
     Run OOD experiment for BNN (Bayesian Neural Network) model.
@@ -1725,7 +1725,7 @@ def run_bamlss_ood_experiment(
     thin: int = 10,
     nsamples: int = 1000,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'numerical'
 ):
     """
     Run OOD experiment for BAMLSS model.

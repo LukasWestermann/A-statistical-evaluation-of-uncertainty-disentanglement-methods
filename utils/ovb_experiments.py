@@ -277,7 +277,7 @@ def save_ovb_model_outputs(
     results_dir,
     param_name: str = 'rho',
     model_name: str = 'MC_Dropout',
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     mu_samples_full=None,
     sigma2_samples_full=None,
     X_full=None,
@@ -382,7 +382,7 @@ def run_mc_dropout_ovb_rho_experiment(
     lr: float = 1e-3,
     batch_size: int = 32,
     mc_samples: int = 100,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     parallel: bool = False,
     save_plots: bool = True,
     results_dir: Path = None
@@ -774,7 +774,7 @@ def run_mc_dropout_ovb_beta2_experiment(
     lr: float = 1e-3,
     batch_size: int = 32,
     mc_samples: int = 100,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     parallel: bool = False,
     save_plots: bool = True,
     results_dir: Path = None
@@ -1167,7 +1167,7 @@ def run_deep_ensemble_ovb_rho_experiment(
     K: int = 10,
     epochs: int = 500,
     batch_size: int = 32,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -1414,7 +1414,7 @@ def run_deep_ensemble_ovb_beta2_experiment(
     K: int = 10,
     epochs: int = 500,
     batch_size: int = 32,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -1641,7 +1641,7 @@ def run_bnn_ovb_rho_experiment(
     weight_scale: float = 1.0,
     warmup: int = 200,
     samples: int = 200,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -1868,7 +1868,7 @@ def run_bnn_ovb_beta2_experiment(
     weight_scale: float = 1.0,
     warmup: int = 200,
     samples: int = 200,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -2097,7 +2097,7 @@ def run_bamlss_ovb_rho_experiment(
     burnin: int = 2000,
     thin: int = 10,
     nsamples: int = 1000,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -2316,7 +2316,7 @@ def run_bamlss_ovb_beta2_experiment(
     burnin: int = 2000,
     thin: int = 10,
     nsamples: int = 1000,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     save_plots: bool = True,
     results_dir: Path = None
 ):

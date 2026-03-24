@@ -718,7 +718,7 @@ def run_mc_dropout_noise_level_experiment(
     batch_size: int = 32,
     mc_samples: int = 100,
     parallel: bool = True,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     save_individual_plots: bool = True
 ):
     """
@@ -1208,7 +1208,7 @@ def run_deep_ensemble_noise_level_experiment(
     K: int = 20,
     epochs: int = 500,
     parallel: bool = True,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     save_individual_plots: bool = True
 ):
     """
@@ -1668,7 +1668,7 @@ def run_bnn_noise_level_experiment(
     samples: int = 200,
     chains: int = 1,
     parallel: bool = True,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     save_individual_plots: bool = True
 ):
     """
@@ -2131,7 +2131,7 @@ def run_bamlss_noise_level_experiment(
     thin: int = 10,
     nsamples: int = 1000,
     parallel: bool = True,
-    entropy_method: str = 'analytical',
+    entropy_method: str = 'numerical',
     save_individual_plots: bool = True
 ):
     """

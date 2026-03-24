@@ -61,6 +61,35 @@ def _ensure_bamlss_installed():
             )
 
 
+def _reshape_bamlss_samples_to_n_by_s(arr, n_grid: int) -> np.ndarray:
+    """Reshape R-exported mu/sigma sample arrays to (n_grid, S) for any S >= 1."""
+    arr = np.asarray(arr)
+    if n_grid <= 0:
+        raise ValueError("n_grid must be positive")
+    if arr.ndim == 1:
+        if arr.size % n_grid != 0:
+            raise ValueError(
+                f"Cannot reshape 1D array of size {arr.size} to rows n_grid={n_grid}"
+            )
+        s = arr.size // n_grid
+        return arr.reshape(n_grid, s)
+    if arr.ndim == 2:
+        if arr.shape[0] == n_grid:
+            return arr
+        if arr.shape[1] == n_grid:
+            return arr.T
+        raise ValueError(
+            f"Cannot orient 2D array {arr.shape} to first dim n_grid={n_grid}"
+        )
+    flat = arr.ravel()
+    if flat.size % n_grid != 0:
+        raise ValueError(
+            f"Cannot reshape array of shape {arr.shape} to rows n_grid={n_grid}"
+        )
+    s = flat.size // n_grid
+    return flat.reshape(n_grid, s)
+
+
 def fit_bamlss(x_train, y_train, x_grid, n_iter=12000, burnin=2000, thin=10, 
                nsamples=1000, k_mu=20, k_sigma=15, return_raw_arrays=False):
     """
@@ -192,118 +221,74 @@ def fit_bamlss(x_train, y_train, x_grid, n_iter=12000, burnin=2000, thin=10,
     }}
     
     if(!got_samples) {{
-      # predict() didn't return samples - extract from MCMC chain
+      # predict() didn't return samples — use fit$samples only (same as fit_bamlss_2d).
+      # Do NOT call samples(fit): it invokes coda::process.chains() and fails when
+      # list elements are matrices, not mcmc objects.
       print("Extracting samples from MCMC chain...")
-      
-  # Get samples from fitted model
-  # Try samples() function first, then fit$samples
-  samps <- tryCatch({{
-    samples(fit)
-  }}, error = function(e) {{
-    if(!is.null(fit$samples)) {{
-      fit$samples
-    }} else {{
-      stop("Cannot extract samples: ", e$message)
-    }}
-  }})
-  
-  if(is.null(samps)) {{
-    stop("Cannot extract samples from fitted model. fit$samples is NULL")
-  }}
-  
-  # Debug: print structure of samples
-  print(paste("Samples structure: class =", class(samps), ", length =", length(samps)))
-  if(is.list(samps) && length(samps) > 0) {{
-    print(paste("First element class:", class(samps[[1]])))
-    if(is.matrix(samps[[1]]) || is.data.frame(samps[[1]])) {{
-      print(paste("First element dimensions:", nrow(samps[[1]]), "x", ncol(samps[[1]])))
-    }}
-  }}
-  
-  # Check structure of samples - bamlss stores samples as a list of matrices
-  # Each element corresponds to a parameter (mu, sigma, etc.)
-  # Find the first non-empty element to get chain length
-  n_chain <- NULL
-  for(i in 1:length(samps)) {{
-    if(!is.null(samps[[i]]) && is.matrix(samps[[i]]) && nrow(samps[[i]]) > 0) {{
-      n_chain <- nrow(samps[[i]])
-      print(paste("Found chain length", n_chain, "from element", i))
-      break
-    }}
-  }}
-  
-  if(is.null(n_chain) || length(n_chain) == 0 || n_chain == 0) {{
-    # Try alternative: check if samples is a data frame or matrix directly
-    if(is.matrix(samps) || is.data.frame(samps)) {{
-      n_chain <- nrow(samps)
-    }} else if(is.list(samps) && length(samps) > 0) {{
-      # Try to find any element with rows
-      for(i in 1:length(samps)) {{
-        if(!is.null(samps[[i]])) {{
-          if(is.matrix(samps[[i]]) && nrow(samps[[i]]) > 0) {{
-            n_chain <- nrow(samps[[i]])
-            break
-          }} else if(is.data.frame(samps[[i]]) && nrow(samps[[i]]) > 0) {{
-            n_chain <- nrow(samps[[i]])
-            break
-          }}
+      samps <- fit$samples
+      if(is.null(samps)) {{
+        samps <- tryCatch({{
+          samples(fit)
+        }}, error = function(e) {{
+          warning("samples(fit) failed and fit$samples is NULL: ", e$message)
+          NULL
+        }})
+      }}
+      if(is.null(samps)) {{
+        stop("Cannot extract samples: fit$samples is NULL and samples(fit) failed.")
+      }}
+
+      # predict.bamlss() calls samples() internally; coda::process.chains() requires
+      # list elements to inherit from "mcmc". bamlss often stores plain matrices.
+      coerce_matrices_to_mcmc <- function(s) {{
+        if(is.null(s)) return(s)
+        if(inherits(s, "mcmc")) return(s)
+        if(is.matrix(s) || is.data.frame(s)) return(coda::as.mcmc(as.matrix(s)))
+        if(is.list(s)) return(lapply(s, coerce_matrices_to_mcmc))
+        s
+      }}
+      samps <- coerce_matrices_to_mcmc(samps)
+
+      get_chain_length <- function(s) {{
+        if(inherits(s, "mcmc")) return(nrow(s))
+        if(is.matrix(s) || is.data.frame(s)) return(nrow(s))
+        if(is.list(s) && length(s) > 0) return(get_chain_length(s[[1]]))
+        NULL
+      }}
+      n_chain <- get_chain_length(samps)
+      if(is.null(n_chain) || n_chain == 0) {{
+        stop("Cannot determine chain length from samples. Structure: ", class(samps), ", length: ", length(samps))
+      }}
+
+      valid_idx <- seq_len(n_chain)
+      n_use <- min(nsamples, n_chain)
+      idx_use <- sample(valid_idx, n_use)
+
+      subset_samples_row <- function(s, idx) {{
+        if(inherits(s, "mcmc")) {{
+          m <- as.matrix(s)[idx, , drop = FALSE]
+          return(coda::as.mcmc(m))
+        }}
+        if(is.matrix(s) || is.data.frame(s)) return(s[idx, , drop = FALSE])
+        if(is.list(s)) return(lapply(s, function(x) subset_samples_row(x, idx)))
+        s
+      }}
+
+      print(paste("Predicting for", n_use, "MCMC samples (this may take a while)..."))
+      mu_list <- list()
+      sg_list <- list()
+      for(i in 1:n_use) {{
+        actual_row <- idx_use[i]
+        fit_i <- fit
+        fit_i$samples <- subset_samples_row(samps, actual_row)
+        mu_pred_i <- predict(fit_i, newdata = r_grid, model = "mu", type = "parameter")
+        sg_pred_i <- predict(fit_i, newdata = r_grid, model = "sigma", type = "parameter")
+        mu_list[[i]] <- as.numeric(mu_pred_i)
+        sg_list[[i]] <- as.numeric(sg_pred_i)
+        if(i %% 100 == 0) {{
+          print(paste("  Processed", i, "of", n_use, "samples"))
         }}
       }}
-    }}
-    
-    if(is.null(n_chain) || length(n_chain) == 0 || n_chain == 0) {{
-      stop("Cannot determine chain length from samples. Structure: ", class(samps), ", length: ", length(samps))
-    }}
-  }}
-  
-  if(n_chain < nsamples) {{
-    warning("Chain has only ", n_chain, " samples, but ", nsamples, " requested. Using all available.")
-    n_use <- n_chain
-    idx_use <- 1:n_chain
-  }} else {{
-    n_use <- nsamples
-    # Randomly sample nsamples from chain
-    idx_use <- sample(n_chain, n_use)
-  }}
-      
-  # Predict for each sample (this is slow but necessary)
-  print(paste("Predicting for", n_use, "MCMC samples (this may take a while)..."))
-  mu_list <- list()
-  sg_list <- list()
-  
-  for(i in 1:n_use) {{
-    # Get the i-th sample index
-    idx_i <- idx_use[i]
-    
-    # Create a temporary fit object with this sample's parameters
-    # We need to extract the i-th row from each parameter's samples
-    fit_i <- fit
-    if(is.list(samps)) {{
-      # Extract i-th sample from each parameter
-      fit_i$samples <- lapply(samps, function(x) {{
-        if(is.matrix(x) && nrow(x) >= idx_i) {{
-          x[idx_i, , drop = FALSE]
-        }} else if(is.data.frame(x) && nrow(x) >= idx_i) {{
-          as.matrix(x[idx_i, , drop = FALSE])
-        }} else {{
-          x  # Keep as is if we can't index
-        }}
-      }})
-    }}
-    
-    # Predict for this sample
-    mu_pred_i <- predict(fit_i, newdata = r_grid, model = "mu", type = "parameter")
-    sg_pred_i <- predict(fit_i, newdata = r_grid, model = "sigma", type = "parameter")
-    
-    mu_list[[i]] <- as.numeric(mu_pred_i)
-    sg_list[[i]] <- as.numeric(sg_pred_i)
-    
-    if(i %% 100 == 0) {{
-      print(paste("  Processed", i, "of", n_use, "samples"))
-    }}
-  }}
-      
-      # Combine into matrices [N x S]
       mu_samps <- do.call(cbind, mu_list)
       sg_samps <- do.call(cbind, sg_list)
       
@@ -330,73 +315,38 @@ def fit_bamlss(x_train, y_train, x_grid, n_iter=12000, burnin=2000, thin=10,
     }}
     
     # Final check
-    if(nrow(mu_samps) != n_grid || ncol(mu_samps) != nsamples) {{
-      stop("mu_samps shape incorrect: got ", nrow(mu_samps), "x", ncol(mu_samps), ", expected ", n_grid, "x", nsamples)
+    if(nrow(mu_samps) != n_grid || nrow(sg_samps) != n_grid) {{
+      stop("mu/sg row count mismatch with grid: mu ", nrow(mu_samps), " sg ", nrow(sg_samps), " n_grid ", n_grid)
     }}
-    if(nrow(sg_samps) != n_grid || ncol(sg_samps) != nsamples) {{
-      stop("sg_samps shape incorrect: got ", nrow(sg_samps), "x", ncol(sg_samps), ", expected ", n_grid, "x", nsamples)
+    if(ncol(mu_samps) != ncol(sg_samps)) {{
+      stop("mu_samps / sg_samps column mismatch: ", ncol(mu_samps), " vs ", ncol(sg_samps))
+    }}
+    if(got_samples && ncol(mu_samps) != nsamples) {{
+      stop("mu_samps shape incorrect: got ", nrow(mu_samps), "x", ncol(mu_samps), ", expected ", n_grid, "x", nsamples)
     }}
     ''')
     
     # Convert to numpy arrays
     mu_samps = np.array(ro.r['mu_samps'])
     sg_samps = np.array(ro.r['sg_samps'])
-    
-    # Debug: print shapes to help diagnose issues
-    print(f"Debug: mu_samps shape from R: {mu_samps.shape}, ndim: {mu_samps.ndim}")
-    print(f"Debug: sg_samps shape from R: {sg_samps.shape}, ndim: {sg_samps.ndim}")
-    print(f"Debug: Expected shape: ({len(x_grid)}, {nsamples})")
-    
-    # Ensure correct shape [N x S] (N points, S samples)
-    # Handle different possible shapes from R
-    # First, ensure arrays are at least 2D
-    if mu_samps.ndim == 1:
-        # If 1D, reshape to [N, S] if size matches
-        if mu_samps.size == len(x_grid) * nsamples:
-            mu_samps = mu_samps.reshape(len(x_grid), nsamples)
-        else:
-            raise ValueError(f"Cannot reshape mu_samps from 1D shape {mu_samps.shape} to [N={len(x_grid)}, S={nsamples}]. Size: {mu_samps.size}, Expected: {len(x_grid) * nsamples}")
-    elif mu_samps.ndim == 2:
-        # If 2D, check orientation and fix if needed
-        if mu_samps.shape[0] != len(x_grid):
-            if mu_samps.shape[1] == len(x_grid):
-                mu_samps = mu_samps.T
-            elif mu_samps.size == len(x_grid) * nsamples:
-                mu_samps = mu_samps.reshape(len(x_grid), nsamples)
-            else:
-                raise ValueError(f"Cannot reshape mu_samps from {mu_samps.shape} to [N={len(x_grid)}, S={nsamples}]")
-    else:
-        # If 3D or higher, try to flatten intelligently
-        if mu_samps.size == len(x_grid) * nsamples:
-            mu_samps = mu_samps.flatten().reshape(len(x_grid), nsamples)
-        else:
-            raise ValueError(f"Cannot reshape mu_samps from {mu_samps.shape} to [N={len(x_grid)}, S={nsamples}]")
-    
-    # Same for sigma samples
-    if sg_samps.ndim == 1:
-        if sg_samps.size == len(x_grid) * nsamples:
-            sg_samps = sg_samps.reshape(len(x_grid), nsamples)
-        else:
-            raise ValueError(f"Cannot reshape sg_samps from 1D shape {sg_samps.shape} to [N={len(x_grid)}, S={nsamples}]. Size: {sg_samps.size}, Expected: {len(x_grid) * nsamples}")
-    elif sg_samps.ndim == 2:
-        if sg_samps.shape[0] != len(x_grid):
-            if sg_samps.shape[1] == len(x_grid):
-                sg_samps = sg_samps.T
-            elif sg_samps.size == len(x_grid) * nsamples:
-                sg_samps = sg_samps.reshape(len(x_grid), nsamples)
-            else:
-                raise ValueError(f"Cannot reshape sg_samps from {sg_samps.shape} to [N={len(x_grid)}, S={nsamples}]")
-    else:
-        if sg_samps.size == len(x_grid) * nsamples:
-            sg_samps = sg_samps.flatten().reshape(len(x_grid), nsamples)
-        else:
-            raise ValueError(f"Cannot reshape sg_samps from {sg_samps.shape} to [N={len(x_grid)}, S={nsamples}]")
-    
-    # Final check: ensure we have the right shape
-    if mu_samps.shape != (len(x_grid), nsamples):
-        raise ValueError(f"mu_samps shape {mu_samps.shape} does not match expected ({len(x_grid)}, {nsamples})")
-    if sg_samps.shape != (len(x_grid), nsamples):
-        raise ValueError(f"sg_samps shape {sg_samps.shape} does not match expected ({len(x_grid)}, {nsamples})")
+    n_grid_py = int(np.asarray(x_grid).ravel().shape[0])
+
+    mu_samps = _reshape_bamlss_samples_to_n_by_s(mu_samps, n_grid_py)
+    sg_samps = _reshape_bamlss_samples_to_n_by_s(sg_samps, n_grid_py)
+    if mu_samps.shape != sg_samps.shape:
+        raise ValueError(
+            f"mu_samps shape {mu_samps.shape} != sg_samps shape {sg_samps.shape}"
+        )
+    n_samp_out = mu_samps.shape[1]
+    print(
+        f"Debug: mu_samps / sg_samps shape (N, S) = ({n_grid_py}, {n_samp_out}) "
+        f"(requested S={nsamples})"
+    )
+    if n_samp_out != nsamples:
+        print(
+            f"Note: using {n_samp_out} posterior draws (requested {nsamples}; "
+            "chain may be shorter than nsamples)."
+        )
     
     # Uncertainty decomposition
     mu_mean = np.mean(mu_samps, axis=1)           # E[μ] - predictive mean
@@ -547,9 +497,19 @@ def fit_bamlss_2d(x_train, z_train, y_train, x_grid, z_grid,
     
     samps <- fit$samples
     if(is.null(samps)) stop("Cannot extract samples: fit$samples is NULL (2D BAMLSS)")
+
+    coerce_matrices_to_mcmc <- function(s) {
+      if(is.null(s)) return(s)
+      if(inherits(s, "mcmc")) return(s)
+      if(is.matrix(s) || is.data.frame(s)) return(coda::as.mcmc(as.matrix(s)))
+      if(is.list(s)) return(lapply(s, coerce_matrices_to_mcmc))
+      s
+    }
+    samps <- coerce_matrices_to_mcmc(samps)
     
     # bamlss stores only (n_iter - burnin) / thin rows; use 1-based row indices into stored chain
     get_chain_length <- function(s) {
+      if(inherits(s, "mcmc")) return(nrow(s))
       if(is.matrix(s) || is.data.frame(s)) return(nrow(s))
       if(is.list(s) && length(s) > 0) return(get_chain_length(s[[1]]))
       NULL
@@ -562,6 +522,10 @@ def fit_bamlss_2d(x_train, z_train, y_train, x_grid, z_grid,
     
     # Recursive helper: subset every matrix in the tree to one row (for nested fit$samples)
     subset_samples_row <- function(s, idx) {
+      if(inherits(s, "mcmc")) {
+        m <- as.matrix(s)[idx, , drop = FALSE]
+        return(coda::as.mcmc(m))
+      }
       if(is.matrix(s) || is.data.frame(s)) return(s[idx, , drop = FALSE])
       if(is.list(s)) return(lapply(s, function(x) subset_samples_row(x, idx)))
       s

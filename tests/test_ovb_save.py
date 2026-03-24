@@ -50,7 +50,7 @@ def test_save_ovb_model_outputs_roundtrip_bnn(tmp_path):
         results_dir=tmp_path,
         param_name='rho',
         model_name='BNN',
-        entropy_method='analytical',
+        entropy_method='numerical',
     )
     npz_files = list(tmp_path.glob('ovb_outputs_BNN_*.npz'))
     assert len(npz_files) == 1

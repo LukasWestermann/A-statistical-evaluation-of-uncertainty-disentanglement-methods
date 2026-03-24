@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from utils.entropy_uncertainty import entropy_uncertainty_numerical
 from utils.knn_entropy import entropy_uncertainty_knn_gaussian_mixture
 from utils.results_save import sanitize_filename
 
@@ -67,6 +68,12 @@ def build_ood_mask(x_grid: np.ndarray, ood_ranges: Sequence[Tuple[float, float]]
 def rng_for_npz(base_seed: int, npz_path: Path) -> np.random.Generator:
     h = hash(str(npz_path.resolve())) % (2**31)
     return np.random.default_rng(np.random.SeedSequence([base_seed, h]))
+
+
+def int_seed_for_npz(base_seed: int, npz_path: Path) -> int:
+    """Deterministic int seed for APIs that take int (e.g. MC mixture entropy)."""
+    h = hash(str(npz_path.resolve())) % (2**31)
+    return int((base_seed * 1_000_003 + h) % (2**31))
 
 
 def function_display(func_type: str) -> str:
@@ -257,6 +264,82 @@ def compute_knn_grid_result(
     )
 
 
+def compute_numerical_grid_result(
+    npz_path: Path,
+    n_samples: int,
+    base_seed: int,
+    ood_ranges: Sequence[Tuple[float, float]],
+    grid_stride: int = 1,
+    grid_chunk_size: Optional[int] = None,
+) -> KnnGridResult:
+    """Same contract as compute_knn_grid_result; entropy from MC mixture (numerical)."""
+    data = np.load(npz_path, allow_pickle=True)
+    mu_samples = np.asarray(data["mu_samples"])
+    sigma2_samples = np.asarray(data["sigma2_samples"])
+    x_grid = np.asarray(data["x_grid"])
+    y_grid_clean = np.asarray(data["y_grid_clean"])
+    mu_samples, sigma2_samples = ensure_samples_first(mu_samples, sigma2_samples, x_grid)
+    mu_samples, sigma2_samples, x_grid, y_grid_clean = apply_stride(
+        mu_samples, sigma2_samples, x_grid, y_grid_clean, grid_stride
+    )
+
+    meta = read_npz_metadata(npz_path, data)
+    seed = int_seed_for_npz(base_seed, npz_path)
+    ent = entropy_uncertainty_numerical(
+        mu_samples,
+        sigma2_samples,
+        n_samples=n_samples,
+        seed=seed,
+        grid_chunk_size=grid_chunk_size,
+    )
+    ale_entropy = np.asarray(ent["aleatoric"]).squeeze()
+    epi_entropy = np.asarray(ent["epistemic"]).squeeze()
+    tot_entropy = np.asarray(ent["total"]).squeeze()
+
+    mu_pred = np.mean(mu_samples, axis=0).squeeze()
+    ale_var = np.mean(sigma2_samples, axis=0).squeeze()
+    epi_var = np.var(mu_samples, axis=0).squeeze()
+
+    ood_mask = build_ood_mask(x_grid, ood_ranges)
+    id_mask = ~ood_mask
+    x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid.ravel()
+    y_clean_flat = y_grid_clean[:, 0] if y_grid_clean.ndim > 1 else y_grid_clean.ravel()
+
+    boundary_x: List[float] = []
+    if np.any(ood_mask):
+        transitions = np.where(np.diff(ood_mask.astype(int)) != 0)[0]
+        if len(transitions) > 0:
+            boundary_x = list(x[transitions + 1])
+
+    x_train_flat = y_train_flat = None
+    if "x_train_subset" in data.files and "y_train_subset" in data.files:
+        xt = np.asarray(data["x_train_subset"])
+        yt = np.asarray(data["y_train_subset"])
+        x_train_flat = xt[:, 0] if xt.ndim > 1 else xt.ravel()
+        y_train_flat = yt[:, 0] if yt.ndim > 1 else yt.ravel()
+
+    return KnnGridResult(
+        mu_samples=mu_samples,
+        sigma2_samples=sigma2_samples,
+        x_grid=x_grid,
+        y_grid_clean=y_grid_clean,
+        mu_pred=mu_pred,
+        ale_var=ale_var,
+        epi_var=epi_var,
+        ale_entropy=ale_entropy,
+        epi_entropy=epi_entropy,
+        tot_entropy=tot_entropy,
+        ood_mask=ood_mask,
+        id_mask=id_mask,
+        x=x,
+        y_clean_flat=y_clean_flat,
+        boundary_x=boundary_x,
+        x_train_flat=x_train_flat,
+        y_train_flat=y_train_flat,
+        meta=meta,
+    )
+
+
 def knn_result_to_panel_dict(res: KnnGridResult) -> Dict[str, Any]:
     return {
         "x": res.x,
@@ -336,6 +419,7 @@ def dataframe_ood_knn_three_regions(
     dropout_p: Optional[float],
     mc_samples: Optional[float],
     n_nets: Optional[float],
+    recompute_note: str = "NLL/CRPS/Spearman not in raw_outputs npz",
 ) -> pd.DataFrame:
     """Rows match save_summary_statistics_entropy_ood columns (one row per region)."""
     rows = []
@@ -352,7 +436,7 @@ def dataframe_ood_knn_three_regions(
             "CRPS": np.nan,
             "Spearman_Aleatoric": np.nan,
             "Spearman_Epistemic": np.nan,
-            "knn_recompute_note": "NLL/CRPS/Spearman not in raw_outputs npz",
+            "knn_recompute_note": recompute_note,
             "function_name": function_name,
             "noise_type": noise_type,
             "func_type": func_type,
@@ -374,6 +458,7 @@ def build_sample_size_entropy_dataframe(
     dropout_p: Optional[float],
     mc_samples: Optional[float],
     n_nets: Optional[float],
+    recompute_note: str = "from raw_outputs k-NN",
 ) -> pd.DataFrame:
     """Mirror compute_and_save_statistics_entropy normalization across percentages."""
     percentages = sorted(pct_to_ent.keys())
@@ -427,6 +512,7 @@ def build_noise_level_entropy_dataframe(
     dropout_p: Optional[float],
     mc_samples: Optional[float],
     n_nets: Optional[float],
+    recompute_note: str = "from raw_outputs k-NN",
 ) -> pd.DataFrame:
     taus = sorted(tau_to_ent.keys())
     if not taus:
@@ -482,6 +568,7 @@ def build_undersampling_approx_dataframe(
     dropout_p: Optional[float],
     mc_samples: Optional[float],
     n_nets: Optional[float],
+    recompute_note: str = "undersampling npz has single grid; not split by sampling regions",
 ) -> pd.DataFrame:
     """Single full-grid 'region' — undersampling multi-region not in npz."""
     ale_min, ale_max = float(ale.min()), float(ale.max())
@@ -507,7 +594,7 @@ def build_undersampling_approx_dataframe(
         "Correlation_Epi_Ale": float(corr),
         "MSE": mse,
         "regions_approximated": True,
-        "knn_recompute_note": "undersampling npz has single grid; not split by sampling regions",
+        "knn_recompute_note": recompute_note,
         "model_name": model_name,
         "date": date,
     }])

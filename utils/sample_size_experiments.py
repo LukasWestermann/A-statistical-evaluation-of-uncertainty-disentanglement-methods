@@ -672,7 +672,7 @@ def run_mc_dropout_sample_size_experiment(
     batch_size: int = 32,
     mc_samples: int = 100,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'numerical'
 ):
     """
     Run sample size experiment for MC Dropout model.
@@ -1024,7 +1024,7 @@ def run_deep_ensemble_sample_size_experiment(
     K: int = 20,
     epochs: int = 500,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'numerical'
 ):
     """
     Run sample size experiment for Deep Ensemble model.
@@ -1378,7 +1378,7 @@ def run_bnn_sample_size_experiment(
     samples: int = 200,
     chains: int = 1,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'numerical'
 ):
     """
     Run sample size experiment for BNN (Bayesian Neural Network) model.
@@ -1732,7 +1732,7 @@ def run_bamlss_sample_size_experiment(
     thin: int = 10,
     nsamples: int = 1000,
     parallel: bool = True,
-    entropy_method: str = 'analytical'
+    entropy_method: str = 'numerical'
 ):
     """
     Run sample size experiment for BAMLSS model.
