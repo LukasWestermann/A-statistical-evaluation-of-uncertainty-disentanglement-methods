@@ -38,7 +38,7 @@ def plot_entropy_lines(x, aleatoric, epistemic, total, save_path=None, title=Non
     """
     if ood_ranges is None:
         ood_ranges = OOD_RANGES
-    base_title = title or "Entropy from npz (formula: AU, EU with Var(mu)/sigma-bar^2)"
+    base_title = title or "Entropy"
     curves = [
         (aleatoric, "green", "Aleatoric (nats)", "Aleatoric"),
         (epistemic, "#C41E3A", "Epistemic (nats)", "Epistemic"),

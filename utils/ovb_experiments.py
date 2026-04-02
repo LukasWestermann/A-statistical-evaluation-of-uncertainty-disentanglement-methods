@@ -23,7 +23,7 @@ from datetime import datetime
 import pandas as pd
 from pathlib import Path
 
-from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
+from utils.entropy_uncertainty import entropy_uncertainty_by_method
 from utils.results_save import sanitize_filename
 from utils.device import get_device_for_worker, get_num_gpus
 from utils.plotting import (
@@ -196,10 +196,9 @@ def _train_single_ovb_config(args):
     mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
     
     # Compute entropy-based uncertainties
-    if entropy_method == 'analytical':
-        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-    else:
-        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+    entropy_results = entropy_uncertainty_by_method(
+        mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+    )
     
     ale_entropy = entropy_results['aleatoric']
     epi_entropy = entropy_results['epistemic']
@@ -277,7 +276,7 @@ def save_ovb_model_outputs(
     results_dir,
     param_name: str = 'rho',
     model_name: str = 'MC_Dropout',
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     mu_samples_full=None,
     sigma2_samples_full=None,
     X_full=None,
@@ -382,7 +381,7 @@ def run_mc_dropout_ovb_rho_experiment(
     lr: float = 1e-3,
     batch_size: int = 32,
     mc_samples: int = 100,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     parallel: bool = False,
     save_plots: bool = True,
     results_dir: Path = None
@@ -503,10 +502,9 @@ def run_mc_dropout_ovb_rho_experiment(
         mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
         
         # Compute entropy-based uncertainties
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        else:
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
@@ -537,10 +535,9 @@ def run_mc_dropout_ovb_rho_experiment(
         mu_pred_full, ale_var_full, epi_var_full, tot_var_full, (mu_samples_full, sigma2_samples_full) = result_full
         
         # Compute entropy-based uncertainties for full model
-        if entropy_method == 'analytical':
-            entropy_results_full = entropy_uncertainty_analytical(mu_samples_full, sigma2_samples_full)
-        else:
-            entropy_results_full = entropy_uncertainty_numerical(mu_samples_full, sigma2_samples_full, n_samples=5000, seed=seed)
+        entropy_results_full = entropy_uncertainty_by_method(
+            mu_samples_full, sigma2_samples_full, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy_full = entropy_results_full['aleatoric']
         epi_entropy_full = entropy_results_full['epistemic']
@@ -565,10 +562,9 @@ def run_mc_dropout_ovb_rho_experiment(
         mu_pred_2d, ale_var_2d, epi_var_2d, tot_var_2d, (mu_samples_2d, sigma2_samples_2d) = result_2d
         
         # Compute entropy on 2D grid
-        if entropy_method == 'analytical':
-            entropy_2d = entropy_uncertainty_analytical(mu_samples_2d, sigma2_samples_2d)
-        else:
-            entropy_2d = entropy_uncertainty_numerical(mu_samples_2d, sigma2_samples_2d, n_samples=5000, seed=seed)
+        entropy_2d = entropy_uncertainty_by_method(
+            mu_samples_2d, sigma2_samples_2d, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy_2d = entropy_2d['aleatoric']
         epi_entropy_2d = entropy_2d['epistemic']
@@ -774,7 +770,7 @@ def run_mc_dropout_ovb_beta2_experiment(
     lr: float = 1e-3,
     batch_size: int = 32,
     mc_samples: int = 100,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     parallel: bool = False,
     save_plots: bool = True,
     results_dir: Path = None
@@ -895,10 +891,9 @@ def run_mc_dropout_ovb_beta2_experiment(
         mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
         
         # Compute entropy-based uncertainties
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        else:
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
@@ -929,10 +924,9 @@ def run_mc_dropout_ovb_beta2_experiment(
         mu_pred_full, ale_var_full, epi_var_full, tot_var_full, (mu_samples_full, sigma2_samples_full) = result_full
         
         # Compute entropy-based uncertainties for full model
-        if entropy_method == 'analytical':
-            entropy_results_full = entropy_uncertainty_analytical(mu_samples_full, sigma2_samples_full)
-        else:
-            entropy_results_full = entropy_uncertainty_numerical(mu_samples_full, sigma2_samples_full, n_samples=5000, seed=seed)
+        entropy_results_full = entropy_uncertainty_by_method(
+            mu_samples_full, sigma2_samples_full, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy_full = entropy_results_full['aleatoric']
         epi_entropy_full = entropy_results_full['epistemic']
@@ -957,10 +951,9 @@ def run_mc_dropout_ovb_beta2_experiment(
         mu_pred_2d, ale_var_2d, epi_var_2d, tot_var_2d, (mu_samples_2d, sigma2_samples_2d) = result_2d
         
         # Compute entropy on 2D grid
-        if entropy_method == 'analytical':
-            entropy_2d = entropy_uncertainty_analytical(mu_samples_2d, sigma2_samples_2d)
-        else:
-            entropy_2d = entropy_uncertainty_numerical(mu_samples_2d, sigma2_samples_2d, n_samples=5000, seed=seed)
+        entropy_2d = entropy_uncertainty_by_method(
+            mu_samples_2d, sigma2_samples_2d, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy_2d = entropy_2d['aleatoric']
         epi_entropy_2d = entropy_2d['epistemic']
@@ -1167,7 +1160,7 @@ def run_deep_ensemble_ovb_rho_experiment(
     K: int = 10,
     epochs: int = 500,
     batch_size: int = 32,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -1257,10 +1250,9 @@ def run_deep_ensemble_ovb_rho_experiment(
         mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
         
         # Compute entropy-based uncertainties
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        else:
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
@@ -1284,10 +1276,9 @@ def run_deep_ensemble_ovb_rho_experiment(
         mu_pred_full, ale_var_full, epi_var_full, tot_var_full, (mu_samples_full, sigma2_samples_full) = result_full
         
         # Compute entropy for full model
-        if entropy_method == 'analytical':
-            entropy_results_full = entropy_uncertainty_analytical(mu_samples_full, sigma2_samples_full)
-        else:
-            entropy_results_full = entropy_uncertainty_numerical(mu_samples_full, sigma2_samples_full, n_samples=5000, seed=seed)
+        entropy_results_full = entropy_uncertainty_by_method(
+            mu_samples_full, sigma2_samples_full, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy_full = entropy_results_full['aleatoric']
         epi_entropy_full = entropy_results_full['epistemic']
@@ -1306,10 +1297,9 @@ def run_deep_ensemble_ovb_rho_experiment(
         result_2d = ensemble_predict_deep(ensemble_full, XZ_grid_flat, return_raw_arrays=True)
         mu_pred_2d, ale_var_2d, epi_var_2d, tot_var_2d, (mu_samples_2d, sigma2_samples_2d) = result_2d
         
-        if entropy_method == 'analytical':
-            entropy_2d = entropy_uncertainty_analytical(mu_samples_2d, sigma2_samples_2d)
-        else:
-            entropy_2d = entropy_uncertainty_numerical(mu_samples_2d, sigma2_samples_2d, n_samples=5000, seed=seed)
+        entropy_2d = entropy_uncertainty_by_method(
+            mu_samples_2d, sigma2_samples_2d, entropy_method, seed=seed, n_samples=5000
+        )
         
         grid_shape = (heatmap_grid_points, heatmap_grid_points)
         
@@ -1414,7 +1404,7 @@ def run_deep_ensemble_ovb_beta2_experiment(
     K: int = 10,
     epochs: int = 500,
     batch_size: int = 32,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -1490,10 +1480,9 @@ def run_deep_ensemble_ovb_beta2_experiment(
         result = ensemble_predict_deep(ensemble, x_grid, return_raw_arrays=True)
         mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
         
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        else:
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
@@ -1512,10 +1501,9 @@ def run_deep_ensemble_ovb_beta2_experiment(
         result_full = ensemble_predict_deep(ensemble_full, X_full, return_raw_arrays=True)
         mu_pred_full, ale_var_full, epi_var_full, tot_var_full, (mu_samples_full, sigma2_samples_full) = result_full
         
-        if entropy_method == 'analytical':
-            entropy_results_full = entropy_uncertainty_analytical(mu_samples_full, sigma2_samples_full)
-        else:
-            entropy_results_full = entropy_uncertainty_numerical(mu_samples_full, sigma2_samples_full, n_samples=5000, seed=seed)
+        entropy_results_full = entropy_uncertainty_by_method(
+            mu_samples_full, sigma2_samples_full, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy_full = entropy_results_full['aleatoric']
         epi_entropy_full = entropy_results_full['epistemic']
@@ -1533,10 +1521,9 @@ def run_deep_ensemble_ovb_beta2_experiment(
         result_2d = ensemble_predict_deep(ensemble_full, XZ_grid_flat, return_raw_arrays=True)
         mu_pred_2d, ale_var_2d, epi_var_2d, tot_var_2d, _ = result_2d
         
-        if entropy_method == 'analytical':
-            entropy_2d = entropy_uncertainty_analytical(result_2d[4][0], result_2d[4][1])
-        else:
-            entropy_2d = entropy_uncertainty_numerical(result_2d[4][0], result_2d[4][1], n_samples=5000, seed=seed)
+        entropy_2d = entropy_uncertainty_by_method(
+            result_2d[4][0], result_2d[4][1], entropy_method, seed=seed, n_samples=5000
+        )
         
         grid_shape = (heatmap_grid_points, heatmap_grid_points)
         
@@ -1641,7 +1628,7 @@ def run_bnn_ovb_rho_experiment(
     weight_scale: float = 1.0,
     warmup: int = 200,
     samples: int = 200,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -1718,10 +1705,9 @@ def run_bnn_ovb_rho_experiment(
                              return_raw_arrays=True, input_dim=1)
         mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
         
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        else:
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
@@ -1740,10 +1726,9 @@ def run_bnn_ovb_rho_experiment(
                                   return_raw_arrays=True, input_dim=2)
         mu_pred_full, ale_var_full, epi_var_full, tot_var_full, (mu_samples_full, sigma2_samples_full) = result_full
         
-        if entropy_method == 'analytical':
-            entropy_results_full = entropy_uncertainty_analytical(mu_samples_full, sigma2_samples_full)
-        else:
-            entropy_results_full = entropy_uncertainty_numerical(mu_samples_full, sigma2_samples_full, n_samples=5000, seed=seed)
+        entropy_results_full = entropy_uncertainty_by_method(
+            mu_samples_full, sigma2_samples_full, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy_full = entropy_results_full['aleatoric']
         epi_entropy_full = entropy_results_full['epistemic']
@@ -1762,10 +1747,9 @@ def run_bnn_ovb_rho_experiment(
                                 return_raw_arrays=True, input_dim=2)
         mu_pred_2d, ale_var_2d, epi_var_2d, tot_var_2d, (mu_samples_2d, sigma2_samples_2d) = result_2d
         
-        if entropy_method == 'analytical':
-            entropy_2d = entropy_uncertainty_analytical(mu_samples_2d, sigma2_samples_2d)
-        else:
-            entropy_2d = entropy_uncertainty_numerical(mu_samples_2d, sigma2_samples_2d, n_samples=5000, seed=seed)
+        entropy_2d = entropy_uncertainty_by_method(
+            mu_samples_2d, sigma2_samples_2d, entropy_method, seed=seed, n_samples=5000
+        )
         
         grid_shape = (heatmap_grid_points, heatmap_grid_points)
         
@@ -1868,7 +1852,7 @@ def run_bnn_ovb_beta2_experiment(
     weight_scale: float = 1.0,
     warmup: int = 200,
     samples: int = 200,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -1945,10 +1929,9 @@ def run_bnn_ovb_beta2_experiment(
                              return_raw_arrays=True, input_dim=1)
         mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
         
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        else:
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
@@ -1967,10 +1950,9 @@ def run_bnn_ovb_beta2_experiment(
                                   return_raw_arrays=True, input_dim=2)
         mu_pred_full, ale_var_full, epi_var_full, tot_var_full, (mu_samples_full, sigma2_samples_full) = result_full
         
-        if entropy_method == 'analytical':
-            entropy_results_full = entropy_uncertainty_analytical(mu_samples_full, sigma2_samples_full)
-        else:
-            entropy_results_full = entropy_uncertainty_numerical(mu_samples_full, sigma2_samples_full, n_samples=5000, seed=seed)
+        entropy_results_full = entropy_uncertainty_by_method(
+            mu_samples_full, sigma2_samples_full, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy_full = entropy_results_full['aleatoric']
         epi_entropy_full = entropy_results_full['epistemic']
@@ -1989,10 +1971,9 @@ def run_bnn_ovb_beta2_experiment(
                                 return_raw_arrays=True, input_dim=2)
         mu_pred_2d, ale_var_2d, epi_var_2d, tot_var_2d, _ = result_2d
         
-        if entropy_method == 'analytical':
-            entropy_2d = entropy_uncertainty_analytical(result_2d[4][0], result_2d[4][1])
-        else:
-            entropy_2d = entropy_uncertainty_numerical(result_2d[4][0], result_2d[4][1], n_samples=5000, seed=seed)
+        entropy_2d = entropy_uncertainty_by_method(
+            result_2d[4][0], result_2d[4][1], entropy_method, seed=seed, n_samples=5000
+        )
         
         grid_shape = (heatmap_grid_points, heatmap_grid_points)
         
@@ -2097,7 +2078,7 @@ def run_bamlss_ovb_rho_experiment(
     burnin: int = 2000,
     thin: int = 10,
     nsamples: int = 1000,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -2169,10 +2150,9 @@ def run_bamlss_ovb_rho_experiment(
                                 n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples)
         mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
         
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        else:
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
@@ -2187,10 +2167,9 @@ def run_bamlss_ovb_rho_experiment(
                                         n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples)
         mu_pred_full, ale_var_full, epi_var_full, tot_var_full, (mu_samples_full, sigma2_samples_full) = result_full
         
-        if entropy_method == 'analytical':
-            entropy_results_full = entropy_uncertainty_analytical(mu_samples_full, sigma2_samples_full)
-        else:
-            entropy_results_full = entropy_uncertainty_numerical(mu_samples_full, sigma2_samples_full, n_samples=5000, seed=seed)
+        entropy_results_full = entropy_uncertainty_by_method(
+            mu_samples_full, sigma2_samples_full, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy_full = entropy_results_full['aleatoric']
         epi_entropy_full = entropy_results_full['epistemic']
@@ -2209,10 +2188,9 @@ def run_bamlss_ovb_rho_experiment(
                                       return_raw_arrays=True, n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples)
         mu_pred_2d, ale_var_2d, epi_var_2d, tot_var_2d, (mu_samples_2d, sigma2_samples_2d) = result_2d
         
-        if entropy_method == 'analytical':
-            entropy_2d = entropy_uncertainty_analytical(mu_samples_2d, sigma2_samples_2d)
-        else:
-            entropy_2d = entropy_uncertainty_numerical(mu_samples_2d, sigma2_samples_2d, n_samples=5000, seed=seed)
+        entropy_2d = entropy_uncertainty_by_method(
+            mu_samples_2d, sigma2_samples_2d, entropy_method, seed=seed, n_samples=5000
+        )
         
         grid_shape = (heatmap_grid_points, heatmap_grid_points)
         
@@ -2316,7 +2294,7 @@ def run_bamlss_ovb_beta2_experiment(
     burnin: int = 2000,
     thin: int = 10,
     nsamples: int = 1000,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     save_plots: bool = True,
     results_dir: Path = None
 ):
@@ -2388,10 +2366,9 @@ def run_bamlss_ovb_beta2_experiment(
                                 n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples)
         mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
         
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        else:
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
@@ -2406,10 +2383,9 @@ def run_bamlss_ovb_beta2_experiment(
                                         n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples)
         mu_pred_full, ale_var_full, epi_var_full, tot_var_full, (mu_samples_full, sigma2_samples_full) = result_full
         
-        if entropy_method == 'analytical':
-            entropy_results_full = entropy_uncertainty_analytical(mu_samples_full, sigma2_samples_full)
-        else:
-            entropy_results_full = entropy_uncertainty_numerical(mu_samples_full, sigma2_samples_full, n_samples=5000, seed=seed)
+        entropy_results_full = entropy_uncertainty_by_method(
+            mu_samples_full, sigma2_samples_full, entropy_method, seed=seed, n_samples=5000
+        )
         
         ale_entropy_full = entropy_results_full['aleatoric']
         epi_entropy_full = entropy_results_full['epistemic']
@@ -2428,10 +2404,9 @@ def run_bamlss_ovb_beta2_experiment(
                                       return_raw_arrays=True, n_iter=n_iter, burnin=burnin, thin=thin, nsamples=nsamples)
         mu_pred_2d, ale_var_2d, epi_var_2d, tot_var_2d, (mu_samples_2d, sigma2_samples_2d) = result_2d
         
-        if entropy_method == 'analytical':
-            entropy_2d = entropy_uncertainty_analytical(mu_samples_2d, sigma2_samples_2d)
-        else:
-            entropy_2d = entropy_uncertainty_numerical(mu_samples_2d, sigma2_samples_2d, n_samples=5000, seed=seed)
+        entropy_2d = entropy_uncertainty_by_method(
+            mu_samples_2d, sigma2_samples_2d, entropy_method, seed=seed, n_samples=5000
+        )
         
         grid_shape = (heatmap_grid_points, heatmap_grid_points)
         

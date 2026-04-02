@@ -2,9 +2,13 @@
 Entropy-based uncertainty decomposition for regression models.
 
 This module provides functions to decompose uncertainty into aleatoric and epistemic
-components using differential entropy instead of variance. Two methods are available:
-1. Analytical: Fast approximation assuming single Gaussian
-2. Numerical: Accurate Monte Carlo estimation of mixture entropy
+components using differential entropy instead of variance. Methods include:
+1. Analytical (mean-variance only): fast mixture approximation via mean sigma^2
+2. Analytical (moment-matched variance): TU = H[N(0, E[sigma^2]+Var(mu))], AU as mean member entropies
+3. Analytical (with_epistemic_var): alternative closed-form AU/EU/TU decomposition
+4. Numerical: Monte Carlo mixture entropy
+5. ``entropy_uncertainty_by_method``: string dispatch for experiment runners (``analytical`` /
+   ``numerical`` / ``moment_matched``)
 """
 
 import numpy as np
@@ -225,6 +229,59 @@ def entropy_uncertainty_analytical_with_epistemic_var(mu, sigma2, eps=1e-10):
     }
 
 
+def entropy_uncertainty_analytical_moment_matched(mu, sigma2, eps=1e-10):
+    """
+    Analytical entropy decomposition with moment-matched predictive variance.
+
+    For an equal-weight Gaussian mixture (M members per grid point), approximate the
+    predictive marginal by a Gaussian whose variance matches the first two mixture
+    moments (law of total variance):
+
+        (sigma*)^2 = E_m[sigma_m^2] + Var_m(mu_m).
+
+    Then TU = differential entropy of N(., (sigma*)^2) = 0.5 * log(2*pi*e * (sigma*)^2).
+
+    AU is the average member Gaussian entropy (same as entropy_uncertainty_analytical).
+    EU = TU - AU.
+
+    Note: mu* = E_m[mu_m] does not appear in (sigma*)^2; only Var(mu) and E[sigma^2] do.
+
+    Parameters
+    ----------
+    mu : array-like, shape (M, N)
+        Member predictive means.
+    sigma2 : array-like, shape (M, N)
+        Member predictive variances.
+    eps : float
+        Passed to _gaussian_entropy for numerical floor on variance.
+
+    Returns
+    -------
+    dict with keys 'aleatoric', 'epistemic', 'total', each shape (N,).
+    """
+    mu = np.asarray(mu)
+    sigma2 = np.asarray(sigma2)
+    if mu.ndim == 1:
+        mu = mu.reshape(1, -1)
+    if sigma2.ndim == 1:
+        sigma2 = sigma2.reshape(1, -1)
+
+    individual_entropies = _gaussian_entropy(sigma2, eps=eps)
+    aleatoric_entropy = np.mean(individual_entropies, axis=0)
+
+    mean_variance = np.mean(sigma2, axis=0)
+    var_mu = np.var(mu, axis=0)
+    moment_matched_var = mean_variance + var_mu
+    total_entropy = _gaussian_entropy(moment_matched_var, eps=eps)
+    epistemic_entropy = total_entropy - aleatoric_entropy
+
+    return {
+        "aleatoric": aleatoric_entropy,
+        "epistemic": epistemic_entropy,
+        "total": total_entropy,
+    }
+
+
 def entropy_uncertainty_numerical(mu, sigma2, n_samples=5000, seed=None, grid_chunk_size=None):
     """
     Monte Carlo entropy-based uncertainty decomposition.
@@ -289,4 +346,42 @@ def entropy_uncertainty_numerical(mu, sigma2, n_samples=5000, seed=None, grid_ch
         'epistemic': epistemic_entropy,
         'total': total_entropy
     }
+
+
+def entropy_uncertainty_by_method(
+    mu,
+    sigma2,
+    method: str,
+    *,
+    seed=None,
+    n_samples: int = 5000,
+    eps: float = 1e-10,
+    grid_chunk_size=None,
+):
+    """
+    Dispatch entropy decomposition by string (used by experiment runners).
+
+    Parameters
+    ----------
+    method : str
+        ``"analytical"``, ``"numerical"``, or ``"moment_matched"`` (aliases: ``moment-matched``).
+    seed : optional
+        Passed to numerical method only.
+    n_samples, grid_chunk_size
+        Passed to numerical method only.
+    eps
+        Passed to moment-matched method only.
+    """
+    m = str(method).strip().lower().replace("-", "_")
+    if m == "analytical":
+        return entropy_uncertainty_analytical(mu, sigma2)
+    if m == "numerical":
+        return entropy_uncertainty_numerical(
+            mu, sigma2, n_samples=n_samples, seed=seed, grid_chunk_size=grid_chunk_size
+        )
+    if m == "moment_matched":
+        return entropy_uncertainty_analytical_moment_matched(mu, sigma2, eps=eps)
+    raise ValueError(
+        f"Unknown entropy_method: {method!r}. Use 'analytical', 'numerical', or 'moment_matched'."
+    )
 

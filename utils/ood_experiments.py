@@ -85,7 +85,7 @@ def accumulate_plot_data(
         _accumulated_ood_plot_data[noise_type][plot_key][region_key]['tot_entropy'] = np.asarray(tot_entropy).squeeze()
 
 
-from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
+from utils.entropy_uncertainty import entropy_uncertainty_by_method
 from utils.device import get_device_for_worker, get_num_gpus
 from utils.metrics import (
     compute_predictive_aggregation,
@@ -800,7 +800,7 @@ def run_mc_dropout_ood_experiment(
     batch_size: int = 32,
     mc_samples: int = 100,
     parallel: bool = True,
-    entropy_method: str = 'numerical'
+    entropy_method: str = 'moment_matched'
 ):
     """
     Run OOD experiment for MC Dropout model.
@@ -905,12 +905,9 @@ def run_mc_dropout_ood_experiment(
         }
         
         # Compute entropy-based uncertainties
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        elif entropy_method == 'numerical':
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-        else:
-            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
         tot_entropy = entropy_results['total']
@@ -1107,7 +1104,7 @@ def run_deep_ensemble_ood_experiment(
     K: int = 20,
     epochs: int = 500,
     parallel: bool = True,
-    entropy_method: str = 'numerical'
+    entropy_method: str = 'moment_matched'
 ):
     """
     Run OOD experiment for Deep Ensemble model.
@@ -1213,12 +1210,9 @@ def run_deep_ensemble_ood_experiment(
         }
         
         # Compute entropy-based uncertainties
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        elif entropy_method == 'numerical':
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-        else:
-            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
         tot_entropy = entropy_results['total']
@@ -1414,7 +1408,7 @@ def run_bnn_ood_experiment(
     samples: int = 200,
     chains: int = 1,
     parallel: bool = True,
-    entropy_method: str = 'numerical'
+    entropy_method: str = 'moment_matched'
 ):
     """
     Run OOD experiment for BNN (Bayesian Neural Network) model.
@@ -1526,12 +1520,9 @@ def run_bnn_ood_experiment(
         }
         
         # Compute entropy-based uncertainties
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        elif entropy_method == 'numerical':
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-        else:
-            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
         tot_entropy = entropy_results['total']
@@ -1725,7 +1716,7 @@ def run_bamlss_ood_experiment(
     thin: int = 10,
     nsamples: int = 1000,
     parallel: bool = True,
-    entropy_method: str = 'numerical'
+    entropy_method: str = 'moment_matched'
 ):
     """
     Run OOD experiment for BAMLSS model.
@@ -1820,12 +1811,9 @@ def run_bamlss_ood_experiment(
         }
         
         # Compute entropy-based uncertainties
-        if entropy_method == 'analytical':
-            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-        elif entropy_method == 'numerical':
-            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-        else:
-            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+        entropy_results = entropy_uncertainty_by_method(
+            mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+        )
         ale_entropy = entropy_results['aleatoric']
         epi_entropy = entropy_results['epistemic']
         tot_entropy = entropy_results['total']

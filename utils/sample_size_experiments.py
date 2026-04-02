@@ -35,7 +35,7 @@ from utils.plotting import (
     plot_uncertainties_no_ood_normalized,
     plot_uncertainties_entropy_no_ood_normalized
 )
-from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
+from utils.entropy_uncertainty import entropy_uncertainty_by_method
 from utils.device import get_device_for_worker, get_num_gpus
 from utils.metrics import (
     compute_predictive_aggregation,
@@ -95,13 +95,9 @@ def _train_single_percentage_mc_dropout(args):
     result = mc_dropout_predict(model, x_grid, M=mc_samples, return_raw_arrays=True)
     mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
     
-    # Compute entropy-based uncertainties
-    if entropy_method == 'analytical':
-        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-    elif entropy_method == 'numerical':
-        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(pct))
-    else:
-        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+    entropy_results = entropy_uncertainty_by_method(
+        mu_samples, sigma2_samples, entropy_method, seed=seed + int(pct), n_samples=5000
+    )
     ale_entropy = entropy_results['aleatoric']
     epi_entropy = entropy_results['epistemic']
     tot_entropy = entropy_results['total']
@@ -159,13 +155,9 @@ def _train_single_percentage_deep_ensemble(args):
     result = ensemble_predict_deep(ensemble, x_grid_norm, return_raw_arrays=True)
     mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
     
-    # Compute entropy-based uncertainties
-    if entropy_method == 'analytical':
-        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-    elif entropy_method == 'numerical':
-        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(pct))
-    else:
-        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+    entropy_results = entropy_uncertainty_by_method(
+        mu_samples, sigma2_samples, entropy_method, seed=seed + int(pct), n_samples=5000
+    )
     ale_entropy = entropy_results['aleatoric']
     epi_entropy = entropy_results['epistemic']
     tot_entropy = entropy_results['total']
@@ -221,13 +213,9 @@ def _train_single_percentage_bnn(args):
     )
     mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
     
-    # Compute entropy-based uncertainties
-    if entropy_method == 'analytical':
-        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-    elif entropy_method == 'numerical':
-        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(pct))
-    else:
-        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+    entropy_results = entropy_uncertainty_by_method(
+        mu_samples, sigma2_samples, entropy_method, seed=seed + int(pct), n_samples=5000
+    )
     ale_entropy = entropy_results['aleatoric']
     epi_entropy = entropy_results['epistemic']
     tot_entropy = entropy_results['total']
@@ -250,8 +238,6 @@ def _train_single_percentage_bamlss(args):
     torch.manual_seed(seed + int(pct))
     
     from Models.BAMLSS import bamlss_predict
-    from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
-    
     # Subsample data
     n_train_full_actual = len(x_train_full)
     n_samples = int(n_train_full_actual * pct / 100)
@@ -267,13 +253,9 @@ def _train_single_percentage_bamlss(args):
     )
     mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
     
-    # Compute entropy-based uncertainties
-    if entropy_method == 'analytical':
-        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-    elif entropy_method == 'numerical':
-        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(pct))
-    else:
-        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+    entropy_results = entropy_uncertainty_by_method(
+        mu_samples, sigma2_samples, entropy_method, seed=seed + int(pct), n_samples=5000
+    )
     ale_entropy = entropy_results['aleatoric']
     epi_entropy = entropy_results['epistemic']
     tot_entropy = entropy_results['total']
@@ -672,7 +654,7 @@ def run_mc_dropout_sample_size_experiment(
     batch_size: int = 32,
     mc_samples: int = 100,
     parallel: bool = True,
-    entropy_method: str = 'numerical'
+    entropy_method: str = 'moment_matched'
 ):
     """
     Run sample size experiment for MC Dropout model.
@@ -881,13 +863,9 @@ def run_mc_dropout_sample_size_experiment(
                 result = mc_dropout_predict(model, x_grid, M=mc_samples, return_raw_arrays=True)
                 mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                 
-                # Compute entropy-based uncertainties
-                if entropy_method == 'analytical':
-                    entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                elif entropy_method == 'numerical':
-                    entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-                else:
-                    raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                entropy_results = entropy_uncertainty_by_method(
+                    mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+                )
                 ale_entropy = entropy_results['aleatoric']
                 epi_entropy = entropy_results['epistemic']
                 tot_entropy = entropy_results['total']
@@ -1024,7 +1002,7 @@ def run_deep_ensemble_sample_size_experiment(
     K: int = 20,
     epochs: int = 500,
     parallel: bool = True,
-    entropy_method: str = 'numerical'
+    entropy_method: str = 'moment_matched'
 ):
     """
     Run sample size experiment for Deep Ensemble model.
@@ -1238,13 +1216,9 @@ def run_deep_ensemble_sample_size_experiment(
                 result = ensemble_predict_deep(ensemble, x_grid_norm, return_raw_arrays=True)
                 mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                 
-                # Compute entropy-based uncertainties
-                if entropy_method == 'analytical':
-                    entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                elif entropy_method == 'numerical':
-                    entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-                else:
-                    raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                entropy_results = entropy_uncertainty_by_method(
+                    mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+                )
                 ale_entropy = entropy_results['aleatoric']
                 epi_entropy = entropy_results['epistemic']
                 tot_entropy = entropy_results['total']
@@ -1378,7 +1352,7 @@ def run_bnn_sample_size_experiment(
     samples: int = 200,
     chains: int = 1,
     parallel: bool = True,
-    entropy_method: str = 'numerical'
+    entropy_method: str = 'moment_matched'
 ):
     """
     Run sample size experiment for BNN (Bayesian Neural Network) model.
@@ -1594,13 +1568,9 @@ def run_bnn_sample_size_experiment(
                 )
                 mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                 
-                # Compute entropy-based uncertainties
-                if entropy_method == 'analytical':
-                    entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                elif entropy_method == 'numerical':
-                    entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-                else:
-                    raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                entropy_results = entropy_uncertainty_by_method(
+                    mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+                )
                 ale_entropy = entropy_results['aleatoric']
                 epi_entropy = entropy_results['epistemic']
                 tot_entropy = entropy_results['total']
@@ -1732,7 +1702,7 @@ def run_bamlss_sample_size_experiment(
     thin: int = 10,
     nsamples: int = 1000,
     parallel: bool = True,
-    entropy_method: str = 'numerical'
+    entropy_method: str = 'moment_matched'
 ):
     """
     Run sample size experiment for BAMLSS model.
@@ -1925,13 +1895,9 @@ def run_bamlss_sample_size_experiment(
                 )
                 mu_pred, ale_var, epi_var, tot_var, (mu_samples, sigma2_samples) = result
                 
-                # Compute entropy-based uncertainties
-                if entropy_method == 'analytical':
-                    entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                elif entropy_method == 'numerical':
-                    entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-                else:
-                    raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                entropy_results = entropy_uncertainty_by_method(
+                    mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+                )
                 ale_entropy = entropy_results['aleatoric']
                 epi_entropy = entropy_results['epistemic']
                 tot_entropy = entropy_results['total']

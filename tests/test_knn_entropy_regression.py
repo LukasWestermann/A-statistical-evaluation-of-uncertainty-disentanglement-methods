@@ -6,11 +6,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from utils.entropy_uncertainty import entropy_uncertainty_analytical_moment_matched
 from utils.knn_entropy_regression import (
     build_ood_mask,
     collect_raw_npz_files,
+    compute_moment_matched_grid_result,
     compute_numerical_grid_result,
     ensure_samples_first,
+    format_2x4_suptitle,
     is_ovb_or_non_raw_path,
 )
 
@@ -30,6 +33,18 @@ def test_is_ovb_excludes_ovb_outputs():
     assert is_ovb_or_non_raw_path(Path("results/x/ovb_outputs_MC_20250101.npz"))
     p = Path("results/ood/outputs/ood/homoscedastic/linear/20260101_BNN_raw_outputs.npz")
     assert not is_ovb_or_non_raw_path(p)
+
+
+def test_format_2x4_suptitle_with_and_without_experiment_prefix():
+    assert format_2x4_suptitle(
+        "Sample size", "Linear", "heteroscedastic", "Variance (std bands)"
+    ) == "Sample size — Linear, heteroscedastic — Variance (std bands)"
+    assert format_2x4_suptitle(
+        "", "Linear", "heteroscedastic", "Entropy"
+    ) == "Linear, heteroscedastic — Entropy"
+    assert format_2x4_suptitle(
+        "  ", "Sine", "homoscedastic", "Entropy"
+    ) == "Sine, homoscedastic — Entropy"
 
 
 def test_collect_raw_npz_skips_ovb(tmp_path):
@@ -87,6 +102,33 @@ def test_compute_numerical_grid_result_smoke(tmp_path):
     assert np.all(np.isfinite(res.ale_entropy))
     assert np.all(np.isfinite(res.epi_entropy))
     assert np.all(np.isfinite(res.tot_entropy))
+
+
+def test_compute_moment_matched_grid_result_matches_direct(tmp_path):
+    """Moment-matched grid helper agrees with entropy_uncertainty_analytical_moment_matched."""
+    rng = np.random.default_rng(3)
+    n_grid = 8
+    s_mem = 3
+    npz_path = tmp_path / "tiny_BNN_raw_outputs.npz"
+    np.savez(
+        npz_path,
+        mu_samples=rng.standard_normal((s_mem, n_grid)).astype(np.float64),
+        sigma2_samples=(np.abs(rng.standard_normal((s_mem, n_grid))) + 0.01).astype(np.float64),
+        x_grid=np.linspace(-1, 1, n_grid).reshape(-1, 1),
+        y_grid_clean=rng.standard_normal((n_grid, 1)),
+        model_name=np.array(["BNN"], dtype=object),
+    )
+    ood = [(0.25, 0.5)]
+    res = compute_moment_matched_grid_result(npz_path, ood, grid_stride=1, eps=1e-10)
+    data = np.load(npz_path, allow_pickle=True)
+    mu = np.asarray(data["mu_samples"])
+    sig = np.asarray(data["sigma2_samples"])
+    xg = np.asarray(data["x_grid"])
+    mu, sig = ensure_samples_first(mu, sig, xg)
+    ent = entropy_uncertainty_analytical_moment_matched(mu, sig, eps=1e-10)
+    np.testing.assert_allclose(res.ale_entropy, np.asarray(ent["aleatoric"]).squeeze())
+    np.testing.assert_allclose(res.epi_entropy, np.asarray(ent["epistemic"]).squeeze())
+    np.testing.assert_allclose(res.tot_entropy, np.asarray(ent["total"]).squeeze())
 
 
 def _load_recompute_knn_script():
