@@ -1,6 +1,9 @@
 """
-2x4 panel plots (2 rows AU/EU x 4 models) for sample_size: sin, heteroscedastic, 100%.
-Generates variance (mean +/- std bands) and entropy (line plots) figures.
+2x4 and 1x4 panel plots for sample_size: sin, heteroscedastic, 100%.
+
+- Variance: 2x4 combined aleatoric/epistemic rows, plus separate 1x4 aleatoric and 1x4 epistemic.
+- Entropy: 2x4 line plots (aleatoric / epistemic rows).
+
 Loads npz from results/sample_size/outputs/sample_size/<noise_type>/<func_type>/.
 No OOD regions; titles indicate "Sample size 100%".
 """
@@ -14,6 +17,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from utils.entropy_uncertainty import entropy_uncertainty_analytical
+from utils.knn_entropy_regression import create_1x4_variance_panel
 
 OUTPUTS_BASE = project_root / "results" / "sample_size" / "outputs" / "sample_size"
 FUNC_TYPE = "sin"
@@ -251,6 +255,30 @@ def main():
     save_path_var = save_dir / "panel_sample_size_2x4_sin_hetero_100_variance.png"
     save_path_ent = save_dir / "panel_sample_size_2x4_sin_hetero_100_entropy.png"
     create_2x4_variance_panel(condition_data_list, display_names, save_path_var)
+    p_ale = save_dir / "panel_sample_size_1x4_sin_hetero_100_variance_aleatoric.png"
+    p_epi = save_dir / "panel_sample_size_1x4_sin_hetero_100_variance_epistemic.png"
+    create_1x4_variance_panel(
+        condition_data_list,
+        display_names,
+        FUNC_TYPE,
+        NOISE_TYPE,
+        p_ale,
+        "Sample size 100%",
+        OOD_RANGES,
+        "aleatoric",
+    )
+    print("Saved:", p_ale)
+    create_1x4_variance_panel(
+        condition_data_list,
+        display_names,
+        FUNC_TYPE,
+        NOISE_TYPE,
+        p_epi,
+        "Sample size 100%",
+        OOD_RANGES,
+        "epistemic",
+    )
+    print("Saved:", p_epi)
     create_2x4_entropy_panel(condition_data_list, display_names, save_path_ent)
     print("Done.")
 

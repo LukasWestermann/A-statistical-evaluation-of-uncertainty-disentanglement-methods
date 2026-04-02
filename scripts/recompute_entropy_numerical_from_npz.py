@@ -6,15 +6,19 @@ Optionally compares with wrong convention using analytical entropy only (fast; a
 
 Usage:
   python scripts/recompute_entropy_numerical_from_npz.py [path/to/file.npz]
-  python scripts/recompute_entropy_numerical_from_npz.py path/to/file.npz --n-samples 5000 --seed 42
+  python scripts/recompute_entropy_numerical_from_npz.py --model mc_dropout
+  python scripts/recompute_entropy_numerical_from_npz.py --model all --n-samples 5000 --seed 42
   python scripts/recompute_entropy_numerical_from_npz.py path/to/file.npz --grid-chunk-size 8
 """
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
+from typing import List, Sequence
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
@@ -22,7 +26,15 @@ sys.path.insert(0, str(project_root))
 from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
 
 DEFAULT_NPZ_DIR = project_root / "results" / "ood" / "outputs" / "ood" / "heteroscedastic" / "sin"
-DEFAULT_GLOB = "*BAMLSS*raw_outputs*.npz"
+
+MODEL_GLOBS: dict[str, str] = {
+    "bamlss": "*BAMLSS*raw_outputs*.npz",
+    "mc_dropout": "*MC_Dropout*raw_outputs*.npz",
+    "deep_ensemble": "*Deep_Ensemble*raw_outputs*.npz",
+    "bnn": "*BNN*raw_outputs*.npz",
+}
+
+MODEL_ORDER: Sequence[str] = ("bamlss", "mc_dropout", "deep_ensemble", "bnn")
 
 
 def _ensure_samples_first(mu_samples, sigma2_samples, x_grid):
@@ -36,50 +48,35 @@ def _ensure_samples_first(mu_samples, sigma2_samples, x_grid):
     return mu, sig
 
 
-def _resolve_npz_path(path_arg: str | None) -> Path:
-    if path_arg:
-        npz_path = Path(path_arg)
-        if not npz_path.is_file():
-            print("File not found:", npz_path)
-            sys.exit(1)
-        return npz_path
-    search_dir = DEFAULT_NPZ_DIR
-    if not search_dir.exists():
-        print("Default directory not found:", search_dir)
-        sys.exit(1)
-    npz_files = sorted(search_dir.glob(DEFAULT_GLOB))
-    if not npz_files:
-        print("No npz found matching", DEFAULT_GLOB, "in", search_dir)
-        sys.exit(1)
-    return npz_files[-1]
+def _latest_npz(search_dir: Path, pattern: str) -> Path | None:
+    files = sorted(search_dir.glob(pattern))
+    return files[-1] if files else None
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Recompute AU/EU/total entropy from npz using Monte Carlo mixture entropy (numerical)."
-    )
-    parser.add_argument(
-        "npz_path",
-        nargs="?",
-        default=None,
-        help=f"Path to .npz (default: latest {DEFAULT_GLOB} under {DEFAULT_NPZ_DIR})",
-    )
-    parser.add_argument("--n-samples", type=int, default=5000, help="MC samples for mixture entropy (default: 5000)")
-    parser.add_argument("--seed", type=int, default=42, help="RNG seed for reproducibility (default: 42)")
-    parser.add_argument(
-        "--grid-chunk-size",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Grid columns per block for log p(y) (default: auto from ~256 MiB budget)",
-    )
-    args = parser.parse_args()
+def resolve_npz_paths(search_dir: Path, model: str) -> List[Path]:
+    if model == "all":
+        out: List[Path] = []
+        for key in MODEL_ORDER:
+            p = _latest_npz(search_dir, MODEL_GLOBS[key])
+            if p is None:
+                print(f"[warn] No file for model preset {key!r} matching {MODEL_GLOBS[key]!r} in {search_dir}")
+            else:
+                out.append(p)
+        return out
+    if model not in MODEL_GLOBS:
+        raise ValueError(f"Unknown model {model!r}")
+    p = _latest_npz(search_dir, MODEL_GLOBS[model])
+    return [p] if p is not None else []
 
-    npz_path = _resolve_npz_path(args.npz_path)
-    n_samples = args.n_samples
-    seed = args.seed
-    grid_chunk_size = args.grid_chunk_size
 
+def process_one_npz(
+    npz_path: Path,
+    *,
+    n_samples: int,
+    seed: int,
+    grid_chunk_size: int | None,
+    save_dir: Path,
+) -> None:
     print("Loading:", npz_path)
     print("  n_samples:", n_samples, " seed:", seed, " grid_chunk_size:", grid_chunk_size)
     data = np.load(npz_path, allow_pickle=True)
@@ -121,10 +118,9 @@ def main():
     any_neg = np.any(epi < 0)
     print("  Any epistemic < 0?", any_neg)
     if any_neg:
-        n_neg = np.sum(epi < 0)
+        n_neg = int(np.sum(epi < 0))
         print("  Count epistemic < 0:", n_neg, "out of", epi.size)
 
-    # Wrong convention: use analytical only (fast; illustrates axis swap, not numerical vs analytical).
     if mu_before.shape[0] != mu_before.shape[1]:
         wrong_mu = mu_samples.T
         wrong_sig = sigma2_samples.T
@@ -143,17 +139,93 @@ def main():
     ax.plot(x, tot, color="blue", linewidth=1.5, label="Total (nats)")
     ax.set_xlabel("x")
     ax.set_ylabel("Entropy (nats)")
-    ax.set_title(f"Numerical entropy (MC mixture, n={n_samples}); epistemic clamped to 0")
+    ax.set_title("Entropy")
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    save_dir = project_root / "results" / "ood" / "plots"
     save_dir.mkdir(parents=True, exist_ok=True)
     out_path = save_dir / f"entropy_recomputed_numerical_clamped_{npz_path.stem}.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"\nSaved plot: {out_path}")
 
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Recompute AU/EU/total entropy from npz using Monte Carlo mixture entropy (numerical)."
+    )
+    parser.add_argument(
+        "npz_path",
+        nargs="?",
+        default=None,
+        type=Path,
+        help="Path to .npz (if set, --model is ignored for input)",
+    )
+    parser.add_argument(
+        "--model",
+        choices=[*MODEL_ORDER, "all"],
+        default="bamlss",
+        help="Which model glob under --search-dir when npz_path is omitted (default: bamlss). "
+        "Use 'all' for latest BAMLSS, MC Dropout, Deep Ensemble, and BNN files.",
+    )
+    parser.add_argument(
+        "--search-dir",
+        type=Path,
+        default=None,
+        help=f"Directory to glob (default: {DEFAULT_NPZ_DIR})",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="Plot output directory (default: results/ood/plots)",
+    )
+    parser.add_argument("--n-samples", type=int, default=5000, help="MC samples for mixture entropy (default: 5000)")
+    parser.add_argument("--seed", type=int, default=42, help="RNG seed (default: 42)")
+    parser.add_argument(
+        "--grid-chunk-size",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Grid columns per block for log p(y) (default: auto)",
+    )
+    args = parser.parse_args()
+
+    save_dir = Path(args.out_dir) if args.out_dir else project_root / "results" / "ood" / "plots"
+
+    if args.npz_path is not None:
+        npz_path = args.npz_path
+        if not npz_path.is_file():
+            print("File not found:", npz_path)
+            sys.exit(1)
+        process_one_npz(
+            npz_path,
+            n_samples=args.n_samples,
+            seed=args.seed,
+            grid_chunk_size=args.grid_chunk_size,
+            save_dir=save_dir,
+        )
+        print("\nDone.")
+        return
+
+    search_dir = Path(args.search_dir) if args.search_dir else DEFAULT_NPZ_DIR
+    if not search_dir.is_dir():
+        print("Directory not found:", search_dir)
+        sys.exit(1)
+
+    paths = resolve_npz_paths(search_dir, args.model)
+    if not paths:
+        print("No npz matched.", f"model={args.model!r}, dir={search_dir}")
+        sys.exit(1)
+
+    for p in paths:
+        process_one_npz(
+            p,
+            n_samples=args.n_samples,
+            seed=args.seed,
+            grid_chunk_size=args.grid_chunk_size,
+            save_dir=save_dir,
+        )
     print("\nDone.")
 
 

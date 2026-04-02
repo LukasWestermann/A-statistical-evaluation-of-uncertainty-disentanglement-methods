@@ -1,0 +1,423 @@
+% Experimental setup chapter (aligned with repository defaults; refine labels/refs to match your thesis).
+% Preamble: \usepackage{amsmath, amssymb, booktabs}
+
+\chapter{Experimental Setup}
+\label{ch:experimental-setup}
+
+This chapter specifies the synthetic data-generating processes (DGPs) and the experimental knobs used to study uncertainty disentanglement under controlled conditions. The goal is to manipulate interpretable parameters while keeping the post-processing of predictive uncertainties fixed, so that changes in estimated aleatoric uncertainty (AU), epistemic uncertainty (EU), and total uncertainty (TU) can be traced to deliberate changes in the simulation. Unless stated otherwise, \emph{baseline} numerical settings match the cells in the \texttt{Experiments/} Jupyter notebooks (Table~\ref{tab:baseline-sim-params}); if a \texttt{utils/} helper differs, the notebook used to generate a figure is authoritative for that figure.
+
+\textit{[Placeholder --- short motivation: why synthetic DGPs, which qualitative hypotheses you test per knob, and how this connects to the methods chapter. Refine after fixing notation.]}
+
+% ---------------------------------------------------------------------------
+\section{Regression data-generating processes}
+\label{sec:regression-dgp}
+
+\subsection{General baseline (toy regression)}
+\label{sec:general-baseline-dgp}
+
+The baseline one-dimensional regression DGP is
+\begin{equation}
+  Y = f(X) + \varepsilon,
+  \qquad
+  \mathbb{E}[\varepsilon \mid X] = 0,
+  \qquad
+  \mathrm{Var}(\varepsilon \mid X) = \sigma^2(X),
+\end{equation}
+with scalar input $X$. Training inputs are drawn uniformly from a fixed \emph{train range} $[a,b]$; the exact interval depends on the experiment (Table~\ref{tab:baseline-sim-params}). Evaluation uses a dense regular grid in $x$ whose endpoints cover the train range and, where applicable, additional intervals used only at test time (OOD evaluation).
+
+\paragraph{Mean functions.}
+Two mean functions are studied in separate conditions:
+\begin{align}
+  f_{\mathrm{lin}}(x) &= 0.7\,x + 0.5, \\
+  f_{\mathrm{sin}}(x) &= x\sin(x) + x.
+\end{align}
+
+\paragraph{Noise structure (Gaussian observation noise).}
+Let $\tau>0$ denote a global noise scale (a \emph{knob} in the noise-level experiments; baseline $\tau=1$ unless $\tau$ is varied). Conditional on $X=x$,
+\begin{equation}
+  \sigma(x) =
+  \begin{cases}
+    \tau, & \text{homoscedastic noise,} \\[0.35em]
+    \tau\,\bigl|\sin(0.5 x + 5)\bigr|, & \text{heteroscedastic noise.}
+  \end{cases}
+\end{equation}
+Observations follow
+\begin{equation}
+  \varepsilon \mid X \sim \mathcal{N}\bigl(0,\sigma^2(X)\bigr),
+  \qquad
+  Y = f(X) + \varepsilon.
+\end{equation}
+For Spearman ``disentanglement'' diagnostics, the implementation evaluates the \emph{true} conditional variance $\sigma^2(x)$ from the same formulas on the evaluation grid.
+
+\paragraph{Remark (noise-level experiments and Laplace).}
+Some driver code still supports a Laplace noise channel for ablations. \textbf{All results reported in this thesis use Gaussian noise only} for the noise-level experiments; the scale $\tau$ is varied as above.
+
+\subsection{OVB baseline (omitted variable bias)}
+\label{sec:ovb-baseline-dgp}
+
+To study misspecification, a latent confounder $Z$ enters the response but is omitted from the fitted predictors. The structural equation is
+\begin{equation}
+  Y = f(X) + \beta_2 Z + \varepsilon,
+\end{equation}
+with the same choices of $f$ and $\varepsilon\mid X$ as in Section~\ref{sec:general-baseline-dgp}. Latent variables are
+\begin{equation}
+  Z \sim \mathcal{N}(0,1),
+  \qquad
+  \nu \sim \mathcal{N}(0,1),
+  \qquad
+  Z \perp \nu,
+\end{equation}
+and the observed covariate is constructed as a linear combination with target correlation $\rho \in [-1,1]$:
+\begin{equation}
+  X_{\mathrm{raw}} = \rho\, Z + \sqrt{1-\rho^2}\,\nu,
+  \qquad
+  \mathrm{Corr}(X_{\mathrm{raw}}, Z) = \rho.
+\end{equation}
+The implementation then applies an affine map so that $X$ concentrates on the train range configured for the run. Models are fit using $(X,Y)$ only; $Z$ is never supplied at training or prediction time. The knobs $\rho$ (strength of $X$--$Z$ dependence) and $\beta_2$ (magnitude of the omitted effect) control the severity of confounding. In \texttt{Experiments/OVB\_regression.ipynb}, the MC Dropout configuration uses $n_{\mathrm{train}}=1000$, train support mapped to $x\in[-5,15]$, and $600$ grid points for evaluation (Table~\ref{tab:baseline-sim-params}), with $\rho$ swept e.g.\ over $\{0,0.5,1\}$ at fixed~$\beta_2$.
+
+% ---------------------------------------------------------------------------
+\section{Baseline simulation parameters (regression)}
+\label{sec:baseline-sim-params}
+
+Table~\ref{tab:baseline-sim-params} lists the settings used in the \texttt{Experiments/} notebooks for one-dimensional regression. Grid length and train/OOD intervals can differ by experiment; offline batch scripts may use other intervals---always match the range to the artifact you cite.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Regression simulation parameters as set in the \texttt{Experiments/} notebooks (primary reference for figures).}
+  \label{tab:baseline-sim-params}
+  \begin{tabular}{llp{6.5cm}}
+    \toprule
+    Setting & Value & Notebook(s) \\
+    \midrule
+    Train range $[a,b]$ & $[-5,10]$ & \texttt{OOD.ipynb}, \texttt{Noise\_Level.ipynb}, \texttt{Sample Size.ipynb}, \texttt{Undersampling.ipynb} \\
+    OOD interval $[c,d]$ & $[10,15]$ & \texttt{OOD.ipynb} (\texttt{ood\_ranges=[(10,15)]}; disjoint from train support) \\
+    Evaluation grid points & $1500$ & \texttt{OOD.ipynb}, \texttt{Noise\_Level.ipynb}, \texttt{Undersampling.ipynb} \\
+    Evaluation grid points & $1000$ & \texttt{Sample Size.ipynb} \\
+    $n_{\mathrm{train}}$ & $1000$ & All above (full pool before percentage subsampling in sample-size runs) \\
+    Noise-level grid $\tau$ & $\{0.5,1,2,2.5,5\}$ & \texttt{Noise\_Level.ipynb} main loops (\texttt{distributions=['normal']}); subset $\{0.5,5\}$ for BNN in the same notebook \\
+    Sample-size percentages & $\{5,10,25,50,100\}\%$ & \texttt{Sample Size.ipynb} (BAMLSS uses \texttt{percentages\_bnn=[10,100]}) \\
+    Undersampling regions & See below & \texttt{Undersampling.ipynb} \\
+    OVB & $n_{\mathrm{train}}=1000$, $x\in[-5,15]$, $600$ grid points & \texttt{OVB\_regression.ipynb} (\texttt{mc\_cfg}) \\
+    Seed & $42$ & Shared across notebooks unless overridden \\
+    Mean function / noise type & linear \& sin; homo.\ / hetero.\ & As in each notebook's \texttt{run\_*} calls \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Out-of-distribution (covariate shift).}
+Training uses only $x\in[-5,10]$. The evaluation grid is built from the union of the train interval and the OOD interval, e.g.\ $[10,15]$ in \texttt{Experiments/OOD.ipynb}, with $1500$ equispaced points spanning the full extent. The conditional noise law is unchanged; only the marginal support of $X$ shifts at test time. Optional simulated OOD draws (\texttt{n\_ood}) in the notebook populate scatter plots in addition to the grid. Some auxiliary pipelines (e.g.\ batch entropy recomputation from stored \texttt{npz}) may use a different OOD interval such as $[30,40]$---cite the range that matches your figure or table.
+
+\paragraph{Undersampling (non-uniform input density).}
+Undersampling is \emph{not} uniform thinning after a single uniform draw. The driver (\texttt{generate\_data\_with\_undersampling} in \texttt{utils/undersampling\_experiments.py}) partitions the train range into axis-aligned intervals, each with a \emph{density factor} $g_r\ge 0$. For every interval, the overlap with $[a,b]$ is computed; its geometric width is multiplied by~$g_r$ to obtain a \emph{weighted width}. The total number of training points~$n_{\mathrm{train}}$ is split across intervals in proportion to these weighted widths (each interval with positive weight receives at least one point). Within interval~$r$, inputs are drawn uniformly on the overlap with~$[a,b]$; responses use the same $f$ and conditional Gaussian noise as in the rest of the chapter. Thus lowering~$g_r$ in a band reduces its expected share of the fixed budget $n_{\mathrm{train}}$ without changing~$n_{\mathrm{train}}$ globally.
+
+\paragraph{How lower density works in practice.}
+Think of $g_r$ as \emph{how hard you insist on filling that slice of the $x$-axis} relative to its length. A wide interval with $g_r{=}1$ behaves like ``normal'' coverage: its quota grows with width. A narrow or down-weighted interval gets a much smaller quota: the model sees the same global budget $n_{\mathrm{train}}$ but far fewer examples from that band, so the empirical design density (histogram of training $x$) is \emph{not} proportional to length---it is proportional to weighted width. Concretely, for region~$r$ let $w_r$ be the width of the intersection of region~$r$ with $[a,b]$; the implementation assigns approximately
+\begin{equation*}
+  n_r \;\approx\; n_{\mathrm{train}}\cdot \frac{g_r\, w_r}{\sum_j g_j\, w_j}
+\end{equation*}
+points to that band (after integer rounding and a floor of one point per band with positive weight, so the realized total can differ slightly from~$n_{\mathrm{train}}$). Within the band, $x$ is still \emph{uniform}---there is no extra clustering---so ``low density'' means \emph{fewer} uniform draws, not a different shape inside the interval. All allocated points are concatenated and \emph{shuffled} before training; minibatches are random subsets of that multiset, so scarce regions contribute fewer gradients per epoch on average, but a batch can still contain points from the hole. The evaluation grid remains evenly spaced on $[a,b]$; boolean \emph{region masks} on that grid mark which $x$ lie in each declared interval for regional summaries and plots, independent of the uneven training counts.
+
+\paragraph{Undersampling configuration in \texttt{Experiments/Undersampling.ipynb}.}
+The notebook compares a \textbf{uniform} baseline to an \textbf{undersampled} map. Both use $n_{\mathrm{train}}=1000$, train range $[-5,10]$, and $1500$ grid points. The undersampled setup is
+\begin{equation*}
+  [({-}5,4), g{=}1],\quad [(4,8), g{=}0.05],\quad [(8,10), g{=}1],
+\end{equation*}
+i.e.\ the central band $(4,8)$ receives $5\%$ of the relative sampling weight of an equal-width band with $g{=}1$, creating a ``hole'' of scarce data between well-covered tails. The uniform baseline replaces $g{=}0.05$ by $g{=}1$ on $(4,8)$. \textit{Remark:} if \texttt{sampling\_regions} is omitted, \texttt{utils/undersampling\_experiments.py} falls back to a different three-part default on $[-5,10]$; the thesis values above follow the notebook.
+
+\paragraph{Illustration (counts for the notebook bands).}
+Widths inside $[-5,10]$ are $9$, $4$, and $2$, so weighted widths are $9$, $0.2$, and $2$ (sum $11.2$). For $n_{\mathrm{train}}{=}1000$, the nominal shares are about $80\%$, $2\%$, and $18\%$ of the pool---hundreds of points in the left and right segments versus on the order of twenty in $(4,8)$. That middle slice is the deliberate data-poor region the model must interpolate across.
+
+% ---------------------------------------------------------------------------
+\section{Experimental knobs (regression)}
+\label{sec:knobs-regression}
+
+\paragraph{Sample size.}
+From a pool of $n_{\mathrm{full}}=1000$ draws on $[-5,10]$, training sets of relative sizes $\{5,10,25,50,100\}\%$ are formed (\texttt{Experiments/Sample Size.ipynb}); the DGP is otherwise unchanged. This knob isolates data volume. The helper \texttt{utils/sample\_size\_experiments.py} also allows a $15\%$ level by default if you call it with the library list rather than the notebook list.
+
+\paragraph{Noise level.}
+$\tau$ is varied on $\{0.5,1,2,2.5,5\}$ within homoscedastic and heteroscedastic noise (\texttt{Experiments/Noise\_Level.ipynb}, Gaussian channel). Reported thesis results use \textbf{Gaussian} $\varepsilon$ only.
+
+\paragraph{OOD evaluation.}
+As above: train on $[a,b]$, evaluate on an extended grid including OOD intervals.
+
+\paragraph{Undersampling.}
+Fixed $n_{\mathrm{train}}=1000$ with piecewise density factors on $[-5,10]$ as in Table~\ref{tab:baseline-sim-params} and the paragraph ``Undersampling configuration'' above.
+
+\paragraph{OVB.}
+Vary $\rho$ and $\beta_2$ with the construction in Section~\ref{sec:ovb-baseline-dgp}.
+
+\textit{[Optional: forward reference to the chapter where you derive expected qualitative AU/EU/TU behavior per knob.]}
+
+% ---------------------------------------------------------------------------
+\section{Classification data-generating processes}
+\label{sec:classification-dgp}
+
+Unless noted, inputs are $X\in\mathbb{R}^2$ and labels $Y\in\{0,\ldots,C-1\}$ with $C=3$ in the default blob setup. Randomness is controlled by a fixed seed (baseline $42$). All classification experiments use either \textbf{information-theoretic (IT)} heads (softmax probabilities per draw) or \textbf{Gaussian-logit (GL)} heads (Gaussian distribution on logits with sampling softmax); uncertainty post-processing is fixed per Section~\ref{sec:clf-models}.
+
+\subsection{General baseline (Gaussian blobs and softmax scores)}
+\label{sec:clf-baseline-blobs}
+
+\paragraph{Class geometry and RCD.}
+Class means $\{c_k\}_{k=1}^C$ are placed at the vertices of an equilateral triangle of edge length~$1$ centered at the origin (implementation: fixed coordinates scaled by a user constant). Let $\sigma_{\mathrm{blob}}>0$ denote the within-class standard deviation (\texttt{blob\_sigma} in code; default $0.25$). The \emph{relative class distance} is
+\begin{equation}
+  \mathrm{RCD} = \frac{d_{\mathrm{between}}}{\sigma_{\mathrm{blob}}},
+\end{equation}
+where $d_{\mathrm{between}}$ is the distance between class centers. Centers used for sampling are
+\begin{equation}
+  c_k = \mathrm{RCD}\cdot \sigma_{\mathrm{blob}} \cdot c_k^{(0)},
+\end{equation}
+with fixed template vertices $c_k^{(0)}$. Increasing RCD separates the blobs without changing $\sigma_{\mathrm{blob}}$; this knob isolates overlap / ambiguity.
+
+\paragraph{Sampling and scores.}
+Training and ID test points are drawn as $X\mid Y=k \sim \mathcal{N}(c_k,\sigma_{\mathrm{blob}}^2 I_2)$ with class priors uniform unless overridden. Class scores are negative squared distances with temperature $\tau>0$ and optional biases $b_k$:
+\begin{equation}
+  s_k(x) = -\frac{\|x-c_k\|^2}{\tau} + b_k,
+  \qquad
+  \pi_k(x) = \frac{\exp(s_k(x))}{\sum_j \exp(s_j(x))}.
+\end{equation}
+Default $\tau=0.2$. These $\pi_k$ are used for softmax supervision and for analysis; training labels are obtained by sampling from $\pi$ or taking argmax depending on the experiment driver.
+
+\paragraph{Label noise and input noise.}
+With label-noise rate $\eta\in[0,1]$, each training label is replaced independently with probability $\eta$ by a uniformly chosen incorrect class. Optional \emph{input noise} adds $\mathcal{N}(0,\sigma_{\mathrm{in}}^2 I)$ separately to train and test inputs (train/test may use different $\sigma_{\mathrm{in}}$).
+
+\paragraph{Undersampling and boundary enrichment.}
+After drawing $(X,Y)$, training points may be thinned using region-specific rules (e.g.\ random removal in axis-aligned ``holes,'' or removal in a band around decision boundaries defined by small margin between the top two scores). Optionally, additional \emph{boundary} points are sampled near midlines between centers and concatenated to the training set to enrich ambiguous regions.
+
+\paragraph{Feature-space OOD (test points with no class label).}
+Optional OOD regions in $\mathbb{R}^2$ (rings, boxes, uniform boxes, etc.) specify where additional test inputs are drawn. Those points are \emph{not} assigned a semantic class label for evaluation: their label is set to $-1$ and they are excluded from accuracy/ECE but included in uncertainty maps and OOD-score analyses. Scores $\pi_k(x)$ may still be computed for visualization.
+
+\subsection{Rotation-based OOD (two-class Gaussian blobs)}
+\label{sec:clf-rotation-ood}
+
+A separate DGP targets \emph{covariate shift via rotation}: by default, binary classes ($C=2$) with centers $(0,0)^\top$ and $(3,3)^\top$, $n_{\mathrm{train}}$ points per class ($\sim 2000$ total by default), and isotropic Gaussian noise with standard deviation $\sigma_{\mathrm{blob}}$ (default $\sqrt{0.2}$). In-distribution data are $(X,Y)$ as above. A second ``OOD'' cloud is formed by applying a fixed rotation matrix $R(\theta)$ to all training inputs (default $\theta=45^\circ$) while keeping the same labels, so that the marginal over $X$ shifts without changing the discrete labeling rule in the rotated coordinate system. This setup is used to study behaviour under geometric shift.
+
+\subsection{Ring geometry with gap (two-class concentric rings)}
+\label{sec:clf-ring-ood}
+
+This DGP is implemented as \texttt{simulate\_ring\_ood\_dataset} in \texttt{utils/classification\_data.py} and driven from \texttt{Experiments/Classification\_Ring\_OOD.ipynb}. It is a \textbf{binary} problem ($C{=}2$) in $\mathbb{R}^2$ with polar structure.
+
+\paragraph{Geometry and labels.}
+Let $r=\|x\|_2$. Training inputs are drawn only from two disjoint annuli:
+\begin{itemize}
+  \item \textbf{Class $0$ (inner):} $r\in[r_{\mathrm{in,min}},r_{\mathrm{in,max}}]$ with defaults $[0.5,1.5]$.
+  \item \textbf{Class $1$ (outer):} $r\in[r_{\mathrm{out,min}},r_{\mathrm{out,max}}]$ with defaults $[2.5,3.5]$.
+\end{itemize}
+The open \textbf{gap} is the annulus $r\in(r_{\mathrm{in,max}},r_{\mathrm{out,min}})=[1.5,2.5]$ under defaults: it contains \emph{no} training samples. Total training size is $N_{\mathrm{train}}$ (default $2000$), split evenly between the two rings ($1000$ per class before shuffling).
+
+\paragraph{Sampling mechanism.}
+For each ring, the code draws $n$ points by independent $\theta\sim\mathrm{Unif}(0,2\pi)$ and $r\sim\mathrm{Unif}(r_{\min},r_{\max})$ on the radius (not $r^2$-uniform), then maps $(r,\theta)\mapsto(x_1,x_2)=(r\cos\theta,r\sin\theta)$. So density is \emph{not} uniform in area in the strict sense; the implementation prioritizes a simple annulus fill and visual annuli. Gap evaluation points $X_{\mathrm{gap}}$ use the same polar recipe on $[r_{\mathrm{in,max}},r_{\mathrm{out,min}}]$ (default $500$ points).
+
+\paragraph{Noise on training data only.}
+After stacking and shuffling inner and outer points, \textbf{coordinate noise} $\mathcal{N}(0,\sigma_{\mathrm{coord}}^2 I_2)$ is added to all training $x$ (default $\sigma_{\mathrm{coord}}=0.1$). \textbf{Label noise} flips each training label independently with probability $\eta$ (default $0.05$). Gap points are \emph{not} given semantic labels for supervised metrics; experiments use them only for predictive uncertainty on inputs where $p_{\mathrm{train}}(x)=0$.
+
+\paragraph{Evaluation and plots (\texttt{utils/classification\_experiments.py}).}
+One model is trained on $(X_{\mathrm{train}},y_{\mathrm{train}})$, then evaluated on (i)~a dense square grid ($100\times 100$ by default) spanning roughly $[-r_{\mathrm{out,max}}-0.5,\,r_{\mathrm{out,max}}+0.5]^2$ for heatmaps, (ii)~the training cloud, and (iii)~$X_{\mathrm{gap}}$. IT models yield member softmax probabilities on each set; \texttt{it\_uncertainty} gives AU/EU/TU on the grid, on ring data, and on the gap. Optional bar plots compare mean uncertainties and AU--EU correlation on rings vs.\ gap. GL variants mirror the same geometry with Gaussian logits and MC softmax.
+
+\paragraph{Design goal.}
+The gap is \emph{covariate shift} with \emph{support mismatch}: the classifier must generalize across angular directions and across the radial void between classes. Epistemic uncertainty is expected to be informative in the gap; aleatoric uncertainty there is not driven by overlapping class manifolds (unlike blob overlap), but still reflects predictive entropy from the fitted model and, on training rings, the injected label and coordinate noise.
+
+% ---------------------------------------------------------------------------
+\section{Baseline simulation parameters (classification)}
+\label{sec:baseline-sim-params-clf}
+
+Table~\ref{tab:baseline-sim-params-clf} collects defaults from \texttt{simulate\_dataset} and the specialized drivers; \texttt{Experiments/Classification\_Sample\_Size.ipynb} uses the same blob geometry with $N_{\mathrm{train}}=1000$, $N_{\mathrm{test}}=500$, $\sigma_{\mathrm{blob}}=0.25$, $\tau=0.2$, $\eta=0$, and seed~$42$. Sweeps vary one field at a time unless noted.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Baseline simulation parameters for classification experiments (repository defaults).}
+  \label{tab:baseline-sim-params-clf}
+  \begin{tabular}{llp{6.5cm}}
+    \toprule
+    Parameter & Baseline value(s) & Notes \\
+    \midrule
+    $C$ (classes, blob DGP) & $3$ & Equilateral triangle centers \\
+    $N_{\mathrm{train}}$ & $1000$ & Varies in sample-size sweeps \\
+    $N_{\mathrm{test}}$ (ID) & $500$ & Held-out ID test draw \\
+    $\sigma_{\mathrm{blob}}$ & $0.25$ & Per-class isotropic std.\ dev. \\
+    $\tau$ (softmax temperature) & $0.2$ & In score function $s_k$ \\
+    RCD & $3.0$ & Relative class distance knob \\
+    $\eta$ (label noise) & $0$ & Varied in label-noise experiments \\
+    $\sigma_{\mathrm{in}}$ & $0$ & Optional input jitter \\
+    Seed & $42$ & Unless overridden \\
+    Rotation OOD $N_{\mathrm{train}}$ & $\sim 2000$ & Equal split across classes \\
+    Rotation angle $\theta$ & $45^\circ$ & Applied to all ID points for OOD cloud \\
+    Ring OOD $N_{\mathrm{train}}$ & $2000$ & Split between two rings \\
+    Gap test points & $500$ & Uniform annulus in default ring driver \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ---------------------------------------------------------------------------
+\section{Experimental knobs (classification)}
+\label{sec:knobs-classification}
+
+\paragraph{Sample size.}
+$N_{\mathrm{train}}$ is varied while keeping the blob geometry, RCD, $\tau$, and noise hyperparameters fixed (unless the experiment couples them explicitly).
+
+\paragraph{Label noise.}
+$\eta$ is varied to inject aleatoric ambiguity independent of model capacity.
+
+\paragraph{RCD.}
+$\mathrm{RCD}$ is varied to change separation between class centers at fixed $\sigma_{\mathrm{blob}}$.
+
+\paragraph{Undersampling / holes / boundary band.}
+Fixed $N_{\mathrm{train}}$ after thinning: lower effective density in specified regions of $\mathbb{R}^2$ or along the decision boundary band.
+
+\paragraph{Standard OOD (blob pipeline).}
+OOD test inputs from declared regions in feature space; labels $-1$ for metrics that require class supervision.
+
+\paragraph{Rotation OOD.}
+Vary $\theta$ and/or $\sigma_{\mathrm{blob}}$ while keeping the binary center geometry (Section~\ref{sec:clf-rotation-ood}).
+
+\paragraph{Ring OOD.}
+Vary radii, gap width, noise on coordinates, or label-flip rate in the ring DGP (Section~\ref{sec:clf-ring-ood}).
+
+% ---------------------------------------------------------------------------
+\section{Summaries, metrics, and uncertainty quantification}
+\label{sec:summaries-metrics}
+
+This section is separate from the DGP: it describes how predictive uncertainties are reduced to scalars, curves, and tables after model training. Unless noted, quantities are computed on the evaluation grid (or on designated ID/OOD subsets).
+
+\subsection{Regression: variance-based decomposition}
+\label{sec:reg-variance}
+
+For each grid point $x$, let members or posterior draws $m=1,\ldots,M$ yield predictive means $\mu^{(m)}(x)$ and observation variances $\sigma^{2,(m)}(x)$ for $y\mid x$. The implementation aggregates
+\begin{align}
+  \sigma^2_{\mathrm{ale}}(x) &= \frac{1}{M}\sum_{m=1}^M \sigma^{2,(m)}(x), \\
+  \sigma^2_{\mathrm{epi}}(x) &= \mathrm{Var}_m\bigl(\mu^{(m)}(x)\bigr), \\
+  \sigma^2_{\mathrm{tot}}(x) &= \sigma^2_{\mathrm{ale}}(x) + \sigma^2_{\mathrm{epi}}(x).
+\end{align}
+Training for neural baselines uses heteroscedastic Gaussian losses (e.g.\ $\beta$-NLL-style objectives in the experiment scripts); BAMLSS follows its own Bayesian GAMLSS fitting routine.
+
+\subsection{Regression: entropy-based decomposition (post hoc)}
+\label{sec:reg-entropy}
+
+Given the same samples $\bigl(\mu^{(m)}(x),\sigma^{2,(m)}(x)\bigr)$, differential entropies are computed \emph{after} training using the routines in \texttt{utils/entropy\_uncertainty.py}: (i)~analytical Gaussian approximations, (ii)~numerical mixture entropy, and optionally (iii)~moment-matched analytical recomputation from stored posterior draws for figures labelled accordingly. These are reporting transforms; they do not replace the training loss.
+
+\subsection{Regression: scalar metrics on the grid}
+\label{sec:reg-scalars}
+
+\begin{itemize}
+  \item \textbf{MSE:} mean squared error between the predictive mean and the clean $f(x)$ on the grid (optionally ID-only or OOD-only).
+  \item \textbf{NLL / CRPS:} Gaussian negative log-likelihood and CRPS using the aggregated predictive mean and variance where applicable.
+  \item \textbf{Disentanglement:} Spearman correlation of aleatoric variance with true $\sigma^2(x)$, and of epistemic variance with squared prediction error, when defined.
+\end{itemize}
+
+\subsection{Regression: normalization and correlations in summary tables}
+\label{sec:reg-norm}
+
+For sample-size and noise-level \emph{summary} curves, componentwise uncertainties are often min--max normalized across the knob (all percentages or all $\tau$ values) before averaging, so that reported ``average AU/EU'' lie in $[0,1]$ within each plot. The exact pooling rule matches the implementation in the corresponding \texttt{compute\_and\_save\_statistics\_*} helper. Pearson correlation between epistemic and aleatoric \emph{summaries} along the knob is reported alongside the means. Region-specific tables (OOD, undersampling regions) use the same normalization philosophy but restricted to the relevant $x$-sets.
+
+\subsection{Classification: models IT and GL}
+\label{sec:clf-models}
+
+\paragraph{Information-theoretic (IT) heads.}
+Let $p^{(m)}(\cdot\mid x)\in\Delta^{C-1}$ be the class-probability vector from member $m=1,\ldots,M$ (MC dropout passes, ensemble members, or posterior predictive draws). The mean predictive is $\bar p(\cdot\mid x)=\frac{1}{M}\sum_{m=1}^M p^{(m)}(\cdot\mid x)$. Using natural logarithms (nats),
+\begin{align}
+  \mathrm{TU}(x) &= H\bigl(\bar p(\cdot\mid x)\bigr)
+  = -\sum_{c=1}^C \bar p_c(x)\,\log \bar p_c(x), \\
+  \mathrm{AU}(x) &= \frac{1}{M}\sum_{m=1}^M H\bigl(p^{(m)}(\cdot\mid x)\bigr), \\
+  \mathrm{EU}(x) &= \mathrm{TU}(x)-\mathrm{AU}(x)
+  \;\approx\; I\bigl(Y;\Theta\mid x,\mathcal{D}\bigr)
+\end{align}
+in the usual mutual-information interpretation.
+
+\paragraph{Gaussian-logit (GL) heads.}
+For each draw $m$, the network outputs logit mean $\mu^{(m)}(x)\in\mathbb{R}^C$ and (positive) logit variance $\sigma^{2,(m)}(x)\in\mathbb{R}^C_{>0}$. Aggregate moments are
+\begin{align}
+  \bar\mu(x) &= \frac{1}{M}\sum_{m=1}^M \mu^{(m)}(x), \\
+  \sigma^2_{\mathrm{ale}}(x) &= \frac{1}{M}\sum_{m=1}^M \sigma^{2,(m)}(x), \\
+  \sigma^2_{\mathrm{epi}}(x) &= \mathrm{Var}_m\bigl(\mu^{(m)}(x)\bigr)
+  \quad\text{(elementwise over classes).}
+\end{align}
+Because $\mathbb{E}[\mathrm{softmax}(Z)]$ for $Z\sim\mathcal{N}(\mu,\mathrm{diag}(\sigma^2))$ has no closed form, class probabilities are approximated by Monte Carlo. The implementation first pools member-wise moments to $\bar\mu$, $\sigma^2_{\mathrm{ale}}$, and $\sigma^2_{\mathrm{epi}}$ as above, then uses the \emph{same} mean $\bar\mu$ with either $\sigma^2_{\mathrm{ale}}$ or $\sigma^2_{\mathrm{epi}}$: sample $z^{(n)}\sim\mathcal{N}(\bar\mu(x),\mathrm{diag}(\sigma^2_{\bullet}(x)))$, apply softmax, and average over $n=1,\ldots,N$ (default $N=100$ in code) to obtain $\hat p_{\mathrm{ale}}(x)$ or $\hat p_{\mathrm{epi}}(x)$. Aleatoric and epistemic entropies are $\mathrm{AU}(x)=H(\hat p_{\mathrm{ale}}(x))$ and $\mathrm{EU}(x)=H(\hat p_{\mathrm{epi}}(x))$.
+
+\subsection{Classification: normalization for plots and tables}
+\label{sec:clf-norm}
+
+For each uncertainty \emph{type} separately (AU, EU, and TU when defined), values on the evaluation grid are mapped to $[0,1]$ by min--max normalization over that grid (or over the plotted region). Thus ``normalized AU'' and ``normalized EU'' use \emph{independent} scales. Heatmaps for appendix figures often fix the color scale to $[0,1]$ when showing normalized quantities.
+
+\subsection{Classification: scalar metrics}
+\label{sec:clf-metrics}
+
+\begin{itemize}
+  \item \textbf{Accuracy:} fraction of correct argmax predictions on test points with true labels in $\{0,\ldots,C-1\}$.
+  \item \textbf{ECE:} expected calibration error with respect to predicted probabilities on ID labelled data.
+  \item \textbf{OOD detection (where implemented):} ROC AUC using a scalar score (typically epistemic uncertainty or EU) to separate ID from OOD-labelled points.
+  \item \textbf{Regional means:} mean AU/EU/TU over ID and OOD subsets of the grid or test cloud; correlation between normalized AU and EU as a summary of interaction along conditions.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Qualitative visualizations}
+\label{sec:qual-plots}
+
+\subsection{Regression}
+
+\paragraph{Variance bands.}
+Plots show $\hat{\mu}(x)$ with tubes $\hat{\mu}(x)\pm\sqrt{\sigma^2_{\bullet}(x)}$ for total, aleatoric, and epistemic components. Train/OOD shading may differ.
+
+\paragraph{Entropy lines.}
+Curves plot aleatoric, epistemic, and total entropy along $x$ in nats. Some panels convert entropy to an equivalent Gaussian standard deviation for visualization via $H=\tfrac{1}{2}\log(2\pi e\sigma^2)$.
+
+\subsection{Classification}
+
+\paragraph{Uncertainty heatmaps.}
+For a dense grid of points in the $(x_1,x_2)$-plane, each location is colored by AU, EU, or (for IT) TU---either raw values or min--max normalized per map (Section~\ref{sec:clf-norm}). The \texttt{viridis} colormap and equal aspect ratio preserve geometry.
+
+\paragraph{Panels and overlays.}
+Multi-panel figures combine several heatmaps for the same experiment (e.g.\ AU, EU, TU for IT models; AU and EU for GL) with optional overlays of training data and misclassified test points (circles). Ring or rotation experiments may use separate panels for train vs.\ gap/OOD regions.
+
+% ---------------------------------------------------------------------------
+\section{Baseline model hyperparameters (regression)}
+\label{sec:baseline-model-params}
+
+Table~\ref{tab:baseline-model-params} lists typical defaults used in the experiment scripts so that differences across runs are driven by the DGP knobs rather than ad hoc changes to optimization. Adjust if your saved runs use different values.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Baseline model hyperparameters (regression experiments; representative repository defaults).}
+  \label{tab:baseline-model-params}
+  \begin{tabular}{lp{9.5cm}}
+    \toprule
+    Model & Key baseline settings \\
+    \midrule
+    MC Dropout & Dropout rate $p=0.25$; $\beta$-NLL-style training with $\beta=0.5$; 100 MC samples at prediction; 500 epochs; learning rate $10^{-3}$; batch size 32 \\
+    Deep Ensemble & Ensemble size $K=20$; same loss schedule as above; 500 epochs; learning rate $10^{-3}$; batch size 32 \\
+    BNN & Hidden width 16 (or 32 in classification drivers); Gaussian weight prior scale 1.0; NUTS with $\mathcal{O}(200)$ posterior samples after warmup (see scripts) \\
+    BAMLSS & $12{,}000$ MCMC iterations; $2{,}000$ burn-in; thinning 10; $1{,}000$ posterior draws for prediction \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Remark.}
+Exact numbers may differ slightly between notebooks and \texttt{utils/*\_experiments.py}; the authoritative values are the arguments passed in the run you archive.
+
+% ---------------------------------------------------------------------------
+\section{Baseline model hyperparameters (classification)}
+\label{sec:baseline-model-params-clf}
+
+Table~\ref{tab:baseline-model-params-clf} mirrors Table~\ref{tab:baseline-model-params} for the 2D blob, rotation, and ring drivers in \texttt{utils/classification\_models.py}. Architectures use two hidden layers of width $32$ with ReLU activations; output heads match IT (logits) or GL ($\mu$ and $\sigma^2$ with softplus).
+
+\begin{table}[htbp]
+  \centering
+  \caption{Classification model settings: \texttt{utils/classification\_models.py} defaults, with \texttt{Experiments/Classification\_Sample\_Size.ipynb} overrides where they differ.}
+  \label{tab:baseline-model-params-clf}
+  \begin{tabular}{lp{9.2cm}}
+    \toprule
+    Model & Key baseline settings \\
+    \midrule
+    MC Dropout & Dropout rate $p=0.25$; $300$ epochs; Adam $\mathrm{lr}=10^{-3}$; batch size $32$; IT: cross-entropy on logits; GL: expected cross-entropy via sampling softmax with $100$ inner samples per batch forward; \textbf{notebook:} $50$ stochastic forward passes at prediction (\texttt{mc\_samples}); \textbf{utils default:} $100$ \\
+    Deep Ensemble & \textbf{Notebook:} $K=5$; \textbf{utils default:} $K=10$; $300$ epochs; otherwise as MC Dropout; one forward per member at prediction \\
+    BNN & Hidden width $32$; Gaussian weight priors with scale $1.0$; NUTS (target acceptance probability $0.8$), $200$ warmup steps, $200$ posterior draws, single chain---defaults in \texttt{train\_bnn\_it} / \texttt{train\_bnn\_gl} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Remark.}
+GL training and GL uncertainty post-processing both rely on Monte Carlo softmax draws; default counts are $100$ unless overridden via configuration (\texttt{gl\_samples}).
+
+% ---------------------------------------------------------------------------
+\section{Reproducibility}
+\label{sec:exp-repro}
+
+Random seeds (typically $42$), architecture choices, and MCMC lengths are fixed per driver; raw \texttt{npz} outputs and filenames encode model hyperparameters for traceability.

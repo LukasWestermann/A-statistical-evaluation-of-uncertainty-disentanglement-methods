@@ -107,7 +107,7 @@ def main():
     ax.plot(x, tot, color="blue", linewidth=1.5, label="Total (nats)")
     ax.set_xlabel("x")
     ax.set_ylabel("Entropy (nats)")
-    ax.set_title("Entropy from npz (epistemic clamped to 0)")
+    ax.set_title("Entropy")
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
     plt.tight_layout()

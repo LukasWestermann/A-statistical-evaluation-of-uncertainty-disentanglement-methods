@@ -12,8 +12,10 @@ sys.path.insert(0, str(project_root))
 
 from utils.entropy_uncertainty import (
     entropy_uncertainty_analytical,
+    entropy_uncertainty_analytical_moment_matched,
+    entropy_uncertainty_by_method,
     entropy_uncertainty_numerical,
-    _gaussian_entropy
+    _gaussian_entropy,
 )
 
 
@@ -130,6 +132,61 @@ class TestEntropyUncertaintyAnalytical:
         
         result = entropy_uncertainty_analytical(mu, sigma2)
         assert result['aleatoric'].shape == (N,)
+
+
+class TestEntropyUncertaintyByMethod:
+    """Dispatcher used by experiment runners."""
+
+    def test_moment_matched_matches_direct(self):
+        rng = np.random.default_rng(1)
+        mu = rng.standard_normal((3, 8))
+        sigma2 = rng.uniform(0.2, 1.5, size=(3, 8))
+        direct = entropy_uncertainty_analytical_moment_matched(mu, sigma2, eps=1e-9)
+        via = entropy_uncertainty_by_method(mu, sigma2, "moment_matched", eps=1e-9)
+        for k in ("aleatoric", "epistemic", "total"):
+            np.testing.assert_allclose(via[k], direct[k])
+
+    def test_analytical_matches_direct(self):
+        rng = np.random.default_rng(2)
+        mu = rng.standard_normal((3, 8))
+        sigma2 = rng.uniform(0.2, 1.5, size=(3, 8))
+        direct = entropy_uncertainty_analytical(mu, sigma2)
+        via = entropy_uncertainty_by_method(mu, sigma2, "analytical")
+        for k in ("aleatoric", "epistemic", "total"):
+            np.testing.assert_allclose(via[k], direct[k])
+
+    def test_unknown_method_raises(self):
+        mu = np.ones((2, 4))
+        sigma2 = np.ones((2, 4))
+        with pytest.raises(ValueError, match="Unknown entropy_method"):
+            entropy_uncertainty_by_method(mu, sigma2, "not_a_method")
+
+
+class TestEntropyUncertaintyMomentMatched:
+    """Moment-matched TU: H[N(0, E[sigma^2]+Var(mu))], EU = TU - AU."""
+
+    def test_matches_explicit_formulas(self):
+        rng = np.random.default_rng(0)
+        M, N = 4, 6
+        mu = rng.standard_normal((M, N))
+        sigma2 = rng.uniform(0.2, 2.0, size=(M, N))
+        out = entropy_uncertainty_analytical_moment_matched(mu, sigma2)
+        mean_var = np.mean(sigma2, axis=0)
+        var_mu = np.var(mu, axis=0)
+        expected_total = _gaussian_entropy(mean_var + var_mu)
+        expected_au = np.mean(_gaussian_entropy(sigma2), axis=0)
+        np.testing.assert_allclose(out["total"], expected_total)
+        np.testing.assert_allclose(out["aleatoric"], expected_au)
+        np.testing.assert_allclose(out["epistemic"], expected_total - expected_au)
+
+    def test_single_member_zero_epistemic(self):
+        rng = np.random.default_rng(42)
+        M, N = 1, 5
+        mu = rng.standard_normal((M, N))
+        sigma2 = rng.uniform(0.2, 1.0, size=(M, N))
+        out = entropy_uncertainty_analytical_moment_matched(mu, sigma2)
+        np.testing.assert_allclose(out["epistemic"], 0.0, atol=1e-9)
+        np.testing.assert_allclose(out["total"], out["aleatoric"], rtol=1e-9)
 
 
 class TestEntropyUncertaintyNumerical:

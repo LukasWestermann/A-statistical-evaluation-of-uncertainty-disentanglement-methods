@@ -9,12 +9,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, BinaryIO, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
-from utils.entropy_uncertainty import entropy_uncertainty_numerical
+from utils.entropy_uncertainty import (
+    entropy_uncertainty_analytical_moment_matched,
+    entropy_uncertainty_numerical,
+)
 from utils.knn_entropy import entropy_uncertainty_knn_gaussian_mixture
 from utils.results_save import sanitize_filename
 
@@ -340,6 +343,73 @@ def compute_numerical_grid_result(
     )
 
 
+def compute_moment_matched_grid_result(
+    npz_path: Path,
+    ood_ranges: Sequence[Tuple[float, float]],
+    grid_stride: int = 1,
+    eps: float = 1e-10,
+) -> KnnGridResult:
+    """Same contract as compute_numerical_grid_result; entropy from analytical moment-matched TU."""
+    data = np.load(npz_path, allow_pickle=True)
+    mu_samples = np.asarray(data["mu_samples"])
+    sigma2_samples = np.asarray(data["sigma2_samples"])
+    x_grid = np.asarray(data["x_grid"])
+    y_grid_clean = np.asarray(data["y_grid_clean"])
+    mu_samples, sigma2_samples = ensure_samples_first(mu_samples, sigma2_samples, x_grid)
+    mu_samples, sigma2_samples, x_grid, y_grid_clean = apply_stride(
+        mu_samples, sigma2_samples, x_grid, y_grid_clean, grid_stride
+    )
+
+    meta = read_npz_metadata(npz_path, data)
+    ent = entropy_uncertainty_analytical_moment_matched(mu_samples, sigma2_samples, eps=eps)
+    ale_entropy = np.asarray(ent["aleatoric"]).squeeze()
+    epi_entropy = np.asarray(ent["epistemic"]).squeeze()
+    tot_entropy = np.asarray(ent["total"]).squeeze()
+
+    mu_pred = np.mean(mu_samples, axis=0).squeeze()
+    ale_var = np.mean(sigma2_samples, axis=0).squeeze()
+    epi_var = np.var(mu_samples, axis=0).squeeze()
+
+    ood_mask = build_ood_mask(x_grid, ood_ranges)
+    id_mask = ~ood_mask
+    x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid.ravel()
+    y_clean_flat = y_grid_clean[:, 0] if y_grid_clean.ndim > 1 else y_grid_clean.ravel()
+
+    boundary_x: List[float] = []
+    if np.any(ood_mask):
+        transitions = np.where(np.diff(ood_mask.astype(int)) != 0)[0]
+        if len(transitions) > 0:
+            boundary_x = list(x[transitions + 1])
+
+    x_train_flat = y_train_flat = None
+    if "x_train_subset" in data.files and "y_train_subset" in data.files:
+        xt = np.asarray(data["x_train_subset"])
+        yt = np.asarray(data["y_train_subset"])
+        x_train_flat = xt[:, 0] if xt.ndim > 1 else xt.ravel()
+        y_train_flat = yt[:, 0] if yt.ndim > 1 else yt.ravel()
+
+    return KnnGridResult(
+        mu_samples=mu_samples,
+        sigma2_samples=sigma2_samples,
+        x_grid=x_grid,
+        y_grid_clean=y_grid_clean,
+        mu_pred=mu_pred,
+        ale_var=ale_var,
+        epi_var=epi_var,
+        ale_entropy=ale_entropy,
+        epi_entropy=epi_entropy,
+        tot_entropy=tot_entropy,
+        ood_mask=ood_mask,
+        id_mask=id_mask,
+        x=x,
+        y_clean_flat=y_clean_flat,
+        boundary_x=boundary_x,
+        x_train_flat=x_train_flat,
+        y_train_flat=y_train_flat,
+        meta=meta,
+    )
+
+
 def knn_result_to_panel_dict(res: KnnGridResult) -> Dict[str, Any]:
     return {
         "x": res.x,
@@ -600,6 +670,73 @@ def build_undersampling_approx_dataframe(
     }])
 
 
+def moment_matched_entropy_density_split_metrics(
+    res: KnnGridResult,
+    sampling_regions: Sequence[Tuple[Tuple[float, float], float]],
+) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """
+    Undersampled vs well-sampled split on the evaluation grid, aligned with
+    ``compute_and_save_statistics_undersampling`` (density < 0.5 vs >= 0.5).
+
+    Min--max normalization of aleatoric/epistemic entropy uses the full grid
+    (same as pooling all per-region grids before normalizing in the variance path).
+    Correlations use raw (unnormalized) entropy values on each subset.
+    """
+    x = np.asarray(res.x).ravel()
+    ale = np.asarray(res.ale_entropy).ravel()
+    epi = np.asarray(res.epi_entropy).ravel()
+    mu = np.asarray(res.mu_pred).ravel()
+    y = np.asarray(res.y_clean_flat).ravel()
+    n = x.shape[0]
+    if ale.shape[0] != n or epi.shape[0] != n:
+        raise ValueError("ale_entropy / epi_entropy length must match x grid")
+
+    mask_under = np.zeros(n, dtype=bool)
+    mask_well = np.zeros(n, dtype=bool)
+    for (lo, hi), dens in sampling_regions:
+        inside = (x >= lo) & (x <= hi)
+        if float(dens) < 0.5:
+            mask_under |= inside
+        else:
+            mask_well |= inside
+
+    ale_min, ale_max = float(ale.min()), float(ale.max())
+    epi_min, epi_max = float(epi.min()), float(epi.max())
+
+    def _norm(v: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
+        if vmax - vmin == 0.0:
+            return np.zeros_like(v)
+        return (v - vmin) / (vmax - vmin)
+
+    ale_n = _norm(ale, ale_min, ale_max)
+    epi_n = _norm(epi, epi_min, epi_max)
+
+    def _pack(mask: np.ndarray) -> Dict[str, float]:
+        if not np.any(mask):
+            return {
+                "Avg_Aleatoric_Entropy_norm": float("nan"),
+                "Avg_Epistemic_Entropy_norm": float("nan"),
+                "Correlation_Epi_Ale": float("nan"),
+                "MSE": float("nan"),
+            }
+        k = int(np.sum(mask))
+        if k < 2:
+            corr = 0.0
+        else:
+            corr = np.corrcoef(epi[mask], ale[mask])[0, 1]
+            if np.isnan(corr):
+                corr = 0.0
+        mse = float(np.mean((mu[mask] - y[mask]) ** 2))
+        return {
+            "Avg_Aleatoric_Entropy_norm": float(np.mean(ale_n[mask])),
+            "Avg_Epistemic_Entropy_norm": float(np.mean(epi_n[mask])),
+            "Correlation_Epi_Ale": float(corr),
+            "MSE": mse,
+        }
+
+    return _pack(mask_under), _pack(mask_well)
+
+
 def resolve_latest_npz(search_dir: Path, globs: Tuple[str, ...]) -> Optional[Path]:
     found: List[Path] = []
     for g in globs:
@@ -623,6 +760,77 @@ def collect_raw_npz_files(search_dir: Path) -> List[Path]:
     return sorted(set(out))
 
 
+def discover_pcts_in_dir(search_dir: Path) -> List[float]:
+    """Sorted unique training percentages inferred from npz stems under search_dir."""
+    if not search_dir.exists():
+        return []
+    found: set[float] = set()
+    for p in collect_raw_npz_files(search_dir):
+        v = parse_pct_from_stem(p.stem)
+        if v is not None:
+            found.add(float(v))
+    return sorted(found)
+
+
+def discover_taus_in_dir(search_dir: Path) -> List[float]:
+    """Sorted unique noise scales τ inferred from npz stems under search_dir."""
+    if not search_dir.exists():
+        return []
+    found: set[float] = set()
+    for p in collect_raw_npz_files(search_dir):
+        v = parse_tau_from_stem(p.stem)
+        if v is not None:
+            found.add(float(v))
+    return sorted(found)
+
+
+def _pct_stem_token(pct: float) -> str:
+    """Filename token after 'pct' (e.g. 25 -> '25', matches *_pct25_*)."""
+    if abs(pct - round(pct)) < 1e-9:
+        return str(int(round(pct)))
+    s = f"{pct:.10f}".rstrip("0").rstrip(".")
+    return s if s else "0"
+
+
+def resolve_latest_npz_at_pct(search_dir: Path, model_tag: str, pct: float) -> Optional[Path]:
+    """Newest raw_outputs npz for model_tag with metadata/stem pct matching ``pct``."""
+    if not search_dir.exists():
+        return None
+    token = _pct_stem_token(pct)
+    globs = (f"*{model_tag}*pct{token}*raw_outputs*.npz",)
+    found: List[Path] = []
+    for g in globs:
+        found.extend(search_dir.rglob(g))
+    found = [p for p in found if not is_ovb_or_non_raw_path(p)]
+    matched: List[Path] = []
+    for p in found:
+        ps = parse_pct_from_stem(p.stem)
+        if ps is not None and abs(float(ps) - float(pct)) < 1e-6:
+            matched.append(p)
+    if not matched:
+        return None
+    return sorted({p.resolve() for p in matched})[-1]
+
+
+def resolve_latest_npz_at_tau(search_dir: Path, model_tag: str, tau: float) -> Optional[Path]:
+    """Newest raw_outputs npz for model_tag with stem τ matching ``tau``."""
+    if not search_dir.exists():
+        return None
+    globs = (f"*{model_tag}*tau*raw_outputs*.npz",)
+    found: List[Path] = []
+    for g in globs:
+        found.extend(search_dir.rglob(g))
+    found = [p for p in found if not is_ovb_or_non_raw_path(p)]
+    matched: List[Path] = []
+    for p in found:
+        tv = parse_tau_from_stem(p.stem)
+        if tv is not None and abs(float(tv) - float(tau)) < 1e-5:
+            matched.append(p)
+    if not matched:
+        return None
+    return sorted({p.resolve() for p in matched})[-1]
+
+
 def save_stats_excel(df: pd.DataFrame, out_dir: Path, filename_stem: str) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{sanitize_filename(filename_stem)}.xlsx"
@@ -631,6 +839,16 @@ def save_stats_excel(df: pd.DataFrame, out_dir: Path, filename_stem: str) -> Pat
 
 
 # --- Plotting (2x4 panels, configurable OOD ranges) ---
+
+
+def format_2x4_suptitle(experiment_title: str, func_title: str, noise_title: str, tail: str) -> str:
+    """Suptitle for 2×4 panels. Empty ``experiment_title`` (after strip) omits the leading knob label."""
+    et = (experiment_title or "").strip()
+    mid = f"{func_title}, {noise_title}"
+    if et:
+        return f"{et} — {mid} — {tail}"
+    return f"{mid} — {tail}"
+
 
 def shade_ood(ax, ood_ranges: Sequence[Tuple[float, float]]) -> None:
     for lo, hi in ood_ranges:
@@ -661,9 +879,11 @@ def create_2x4_variance_panel(
     display_names: Sequence[str],
     func_type: str,
     noise_type: str,
-    save_path: Path,
+    save_path: Union[Path, BinaryIO],
     experiment_title: str,
     ood_ranges: Sequence[Tuple[float, float]],
+    *,
+    dpi: int = 150,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -699,7 +919,75 @@ def create_2x4_variance_panel(
         axes[1, col].set_xlabel("x", fontsize=11, fontweight="bold")
     axes[0, 0].set_ylabel("y\n(Aleatoric)", fontsize=10, fontweight="bold")
     axes[1, 0].set_ylabel("y\n(Epistemic)", fontsize=10, fontweight="bold")
-    fig.suptitle(f"{experiment_title} — {func_title}, {noise_title} — Variance (std bands)", fontsize=14, fontweight="bold", y=0.995)
+    fig.suptitle(
+        format_2x4_suptitle(experiment_title, func_title, noise_title, "Variance (std bands)"),
+        fontsize=14,
+        fontweight="bold",
+        y=0.995,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.98])
+    if isinstance(save_path, Path):
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+
+def create_1x4_variance_panel(
+    condition_data_list: List[Optional[Dict[str, Any]]],
+    display_names: Sequence[str],
+    func_type: str,
+    noise_type: str,
+    save_path: Path,
+    experiment_title: str,
+    ood_ranges: Sequence[Tuple[float, float]],
+    variance_component: str,
+) -> None:
+    """
+    Single row × 4 models: predictive mean with ±σ band for either aleatoric or epistemic variance only.
+
+    variance_component: "aleatoric" (uses ale_var) or "epistemic" (uses epi_var).
+    """
+    import matplotlib.pyplot as plt
+
+    if variance_component not in ("aleatoric", "epistemic"):
+        raise ValueError("variance_component must be 'aleatoric' or 'epistemic'")
+
+    var_key = "ale_var" if variance_component == "aleatoric" else "epi_var"
+    color = "#06A77D" if variance_component == "aleatoric" else "#F18F01"
+    label = "±σ(aleatoric)" if variance_component == "aleatoric" else "±σ(epistemic)"
+    row_ylabel = f"y ({variance_component.capitalize()})"
+
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5), sharex=True)
+    func_title = function_display(func_type)
+    noise_title = "homoscedastic" if noise_type == "homoscedastic" else "heteroscedastic"
+
+    for col in range(4):
+        ax = axes[col]
+        if col >= len(condition_data_list) or condition_data_list[col] is None:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes, fontsize=12)
+            ax.set_ylabel("y", fontsize=10)
+            ax.set_title(display_names[col], fontweight="bold", fontsize=11, pad=6)
+            continue
+        data = condition_data_list[col]
+        x = data["x"]
+        mu_pred = data["mu_pred"]
+        var = data[var_key]
+        ax.plot(x, mu_pred, "b-", linewidth=2, label="Predictive mean", zorder=5)
+        ax.fill_between(x, mu_pred - np.sqrt(var), mu_pred + np.sqrt(var), alpha=0.35, color=color, label=label, zorder=1)
+        add_common_variance(ax, data, ood_ranges)
+        ax.set_ylabel("y", fontsize=10)
+        ax.set_title(display_names[col], fontweight="bold", fontsize=11, pad=6)
+        ax.legend(loc="upper left", fontsize=8, framealpha=0.9)
+
+    for col in range(4):
+        axes[col].set_xlabel("x", fontsize=11, fontweight="bold")
+    axes[0].set_ylabel(row_ylabel, fontsize=10, fontweight="bold")
+    fig.suptitle(
+        f"{experiment_title} — {func_title}, {noise_title} — Variance ({variance_component})",
+        fontsize=14,
+        fontweight="bold",
+        y=0.995,
+    )
     plt.tight_layout(rect=[0, 0, 1, 0.98])
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -729,10 +1017,12 @@ def create_2x4_entropy_panel(
     display_names: Sequence[str],
     func_type: str,
     noise_type: str,
-    save_path: Path,
+    save_path: Union[Path, BinaryIO],
     experiment_title: str,
     ood_ranges: Sequence[Tuple[float, float]],
-    entropy_subtitle: str = "Entropy k-NN (line plots)",
+    entropy_subtitle: str = "Entropy",
+    *,
+    dpi: int = 150,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -770,10 +1060,16 @@ def create_2x4_entropy_panel(
         axes[1, col].set_xlabel("x", fontsize=11, fontweight="bold")
     axes[0, 0].set_ylabel("y\n(Aleatoric)", fontsize=10, fontweight="bold")
     axes[1, 0].set_ylabel("y\n(Epistemic)", fontsize=10, fontweight="bold")
-    fig.suptitle(f"{experiment_title} — {func_title}, {noise_title} — {entropy_subtitle}", fontsize=14, fontweight="bold", y=0.995)
+    fig.suptitle(
+        format_2x4_suptitle(experiment_title, func_title, noise_title, entropy_subtitle),
+        fontsize=14,
+        fontweight="bold",
+        y=0.995,
+    )
     plt.tight_layout(rect=[0, 0, 1, 0.98])
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    if isinstance(save_path, Path):
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -788,7 +1084,7 @@ def plot_entropy_lines(
 ) -> List[Path]:
     import matplotlib.pyplot as plt
 
-    base_title = title or "Entropy from npz (k-NN / Eq. 6)"
+    base_title = title or "Entropy"
     curves = [
         (aleatoric, "green", "Aleatoric (nats)", "Aleatoric"),
         (epistemic, "#C41E3A", "Epistemic (nats)", "Epistemic"),

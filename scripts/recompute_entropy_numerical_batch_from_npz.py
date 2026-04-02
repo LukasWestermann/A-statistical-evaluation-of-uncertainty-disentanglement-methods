@@ -8,6 +8,7 @@ Batch (OOD, sample_size, noise_level, undersampling — all four models; exclude
     python scripts/recompute_entropy_numerical_batch_from_npz.py --batch
 
 Outputs default to results/entropy_recomputed_numerical/ (statistics/ + plots/ + tables/).
+Batch variance figures: 2x4 plus 1x4 aleatoric-only and epistemic-only per experiment key.
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from utils.knn_entropy_regression import (
     build_undersampling_approx_dataframe,
     collect_raw_npz_files,
     compute_numerical_grid_result,
+    create_1x4_variance_panel,
     create_2x4_entropy_panel,
     create_2x4_variance_panel,
     dataframe_ood_knn_three_regions,
@@ -80,7 +82,7 @@ def run_single_npz(
     print("  mu_samples shape (M, N):", res.mu_samples.shape)
     plot_dir = out_root / "plots" / "single"
     out_path = plot_dir / f"entropy_recomputed_numerical_n{n_samples}_{npz_path.stem}.png"
-    title = f"MC mixture entropy (numerical), n_samples={n_samples}"
+    title = "Entropy"
     saved = plot_entropy_lines(
         res.x, res.ale_entropy, res.epi_entropy, res.tot_entropy, out_path, title, ood_ranges
     )
@@ -184,7 +186,7 @@ def run_batch(
                         plot_entropy_lines(
                             res.x, res.ale_entropy, res.epi_entropy, res.tot_entropy,
                             pdir / f"numerical_n{n_samples}_{npz_path.stem}.png",
-                            f"MC mixture n={n_samples}",
+                            "Entropy",
                             ood_ranges,
                         )
 
@@ -358,12 +360,26 @@ def run_batch(
                 title_short,
                 ranges_for_panels,
             )
+            create_1x4_variance_panel(
+                condition_data_list, display_names, func_type, noise_type,
+                pdir / f"panel_{key}_numerical_1x4_{slug}_variance_aleatoric.png",
+                title_short,
+                ranges_for_panels,
+                "aleatoric",
+            )
+            create_1x4_variance_panel(
+                condition_data_list, display_names, func_type, noise_type,
+                pdir / f"panel_{key}_numerical_1x4_{slug}_variance_epistemic.png",
+                title_short,
+                ranges_for_panels,
+                "epistemic",
+            )
             create_2x4_entropy_panel(
                 condition_data_list, display_names, func_type, noise_type,
                 pdir / f"panel_{key}_numerical_2x4_{slug}_entropy.png",
                 title_short,
                 ranges_for_panels,
-                entropy_subtitle="MC mixture entropy (numerical)",
+                entropy_subtitle="Entropy",
             )
 
     agg_path = tables_dir / f"numerical_entropy_aggregate_{date}.xlsx"

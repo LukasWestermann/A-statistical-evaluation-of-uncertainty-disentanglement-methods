@@ -27,7 +27,7 @@ from utils.plotting import (
     plot_uncertainties_no_ood_normalized,
     plot_uncertainties_entropy_no_ood_normalized
 )
-from utils.entropy_uncertainty import entropy_uncertainty_analytical, entropy_uncertainty_numerical
+from utils.entropy_uncertainty import entropy_uncertainty_by_method
 from utils.device import get_device_for_worker, get_num_gpus
 from utils.metrics import (
     compute_predictive_aggregation,
@@ -718,7 +718,7 @@ def run_mc_dropout_noise_level_experiment(
     batch_size: int = 32,
     mc_samples: int = 100,
     parallel: bool = True,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     save_individual_plots: bool = True
 ):
     """
@@ -831,13 +831,10 @@ def run_mc_dropout_noise_level_experiment(
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
                         
-                        # Compute entropy-based uncertainties
-                        if entropy_method == 'analytical':
-                            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                        elif entropy_method == 'numerical':
-                            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(tau * 100))
-                        else:
-                            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                        entropy_results = entropy_uncertainty_by_method(
+                            mu_samples, sigma2_samples, entropy_method,
+                            seed=seed + int(tau * 100), n_samples=5000,
+                        )
                         ale_entropy = entropy_results['aleatoric']
                         epi_entropy = entropy_results['epistemic']
                         tot_entropy = entropy_results['total']
@@ -1023,13 +1020,9 @@ def run_mc_dropout_noise_level_experiment(
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
                     
-                    # Compute entropy-based uncertainties
-                    if entropy_method == 'analytical':
-                        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                    elif entropy_method == 'numerical':
-                        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-                    else:
-                        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                    entropy_results = entropy_uncertainty_by_method(
+                        mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+                    )
                     ale_entropy = entropy_results['aleatoric']
                     epi_entropy = entropy_results['epistemic']
                     tot_entropy = entropy_results['total']
@@ -1208,7 +1201,7 @@ def run_deep_ensemble_noise_level_experiment(
     K: int = 20,
     epochs: int = 500,
     parallel: bool = True,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     save_individual_plots: bool = True
 ):
     """
@@ -1308,13 +1301,10 @@ def run_deep_ensemble_noise_level_experiment(
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
                         
-                        # Compute entropy-based uncertainties
-                        if entropy_method == 'analytical':
-                            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                        elif entropy_method == 'numerical':
-                            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(tau * 100))
-                        else:
-                            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                        entropy_results = entropy_uncertainty_by_method(
+                            mu_samples, sigma2_samples, entropy_method,
+                            seed=seed + int(tau * 100), n_samples=5000,
+                        )
                         ale_entropy = entropy_results['aleatoric']
                         epi_entropy = entropy_results['epistemic']
                         tot_entropy = entropy_results['total']
@@ -1488,13 +1478,9 @@ def run_deep_ensemble_noise_level_experiment(
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
                     
-                    # Compute entropy-based uncertainties
-                    if entropy_method == 'analytical':
-                        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                    elif entropy_method == 'numerical':
-                        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-                    else:
-                        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                    entropy_results = entropy_uncertainty_by_method(
+                        mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+                    )
                     ale_entropy = entropy_results['aleatoric']
                     epi_entropy = entropy_results['epistemic']
                     tot_entropy = entropy_results['total']
@@ -1668,7 +1654,7 @@ def run_bnn_noise_level_experiment(
     samples: int = 200,
     chains: int = 1,
     parallel: bool = True,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     save_individual_plots: bool = True
 ):
     """
@@ -1770,13 +1756,10 @@ def run_bnn_noise_level_experiment(
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
                         
-                        # Compute entropy-based uncertainties
-                        if entropy_method == 'analytical':
-                            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                        elif entropy_method == 'numerical':
-                            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(tau * 100))
-                        else:
-                            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                        entropy_results = entropy_uncertainty_by_method(
+                            mu_samples, sigma2_samples, entropy_method,
+                            seed=seed + int(tau * 100), n_samples=5000,
+                        )
                         ale_entropy = entropy_results['aleatoric']
                         epi_entropy = entropy_results['epistemic']
                         tot_entropy = entropy_results['total']
@@ -1953,13 +1936,9 @@ def run_bnn_noise_level_experiment(
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
                     
-                    # Compute entropy-based uncertainties
-                    if entropy_method == 'analytical':
-                        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                    elif entropy_method == 'numerical':
-                        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-                    else:
-                        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                    entropy_results = entropy_uncertainty_by_method(
+                        mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+                    )
                     ale_entropy = entropy_results['aleatoric']
                     epi_entropy = entropy_results['epistemic']
                     tot_entropy = entropy_results['total']
@@ -2131,7 +2110,7 @@ def run_bamlss_noise_level_experiment(
     thin: int = 10,
     nsamples: int = 1000,
     parallel: bool = True,
-    entropy_method: str = 'numerical',
+    entropy_method: str = 'moment_matched',
     save_individual_plots: bool = True
 ):
     """
@@ -2221,13 +2200,10 @@ def run_bamlss_noise_level_experiment(
                         uncertainties_by_tau[tau]['tot'].append(tot_var)
                         mse_by_tau[tau].append(mse)
                         
-                        # Compute entropy-based uncertainties
-                        if entropy_method == 'analytical':
-                            entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                        elif entropy_method == 'numerical':
-                            entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed + int(tau * 100))
-                        else:
-                            raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                        entropy_results = entropy_uncertainty_by_method(
+                            mu_samples, sigma2_samples, entropy_method,
+                            seed=seed + int(tau * 100), n_samples=5000,
+                        )
                         ale_entropy = entropy_results['aleatoric']
                         epi_entropy = entropy_results['epistemic']
                         tot_entropy = entropy_results['total']
@@ -2394,13 +2370,9 @@ def run_bamlss_noise_level_experiment(
                     uncertainties_by_tau[tau]['tot'].append(tot_var)
                     mse_by_tau[tau].append(mse)
                     
-                    # Compute entropy-based uncertainties
-                    if entropy_method == 'analytical':
-                        entropy_results = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
-                    elif entropy_method == 'numerical':
-                        entropy_results = entropy_uncertainty_numerical(mu_samples, sigma2_samples, n_samples=5000, seed=seed)
-                    else:
-                        raise ValueError(f"Unknown entropy_method: {entropy_method}. Must be 'analytical' or 'numerical'")
+                    entropy_results = entropy_uncertainty_by_method(
+                        mu_samples, sigma2_samples, entropy_method, seed=seed, n_samples=5000
+                    )
                     ale_entropy = entropy_results['aleatoric']
                     epi_entropy = entropy_results['epistemic']
                     tot_entropy = entropy_results['total']
