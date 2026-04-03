@@ -13,6 +13,12 @@ the grid, ``Correlation_Epi_Ale``, ``MSE``.
 
 Writes Markdown (readable for Claude) and CSV (one row per scenario × pct × model).
 
+Also writes baseline (default **100%** training) **LaTeX** tables unless ``--no-tex``:
+
+- ``--out-tex-corr``: $\rho$ for variance vs **moment-matched batch** entropy (from
+  ``entropy_recomputed_moment_matched_batch/statistics/.../moment_matched_entropy_sample_size*.xlsx``).
+- ``out-tex-mse``: single MSE table (same value for both decompositions).
+
 With ``--figure-out``, saves two small-multiples PNGs: normalized **AU** and **Pearson ρ**
 (variance solid vs moment-matched entropy dashed).
 
@@ -260,6 +266,108 @@ def save_rho_overview_figure(df: pd.DataFrame, path: Path) -> None:
     plt.close(fig)
 
 
+def _latex_num(x: Any, nd: int = 3) -> str:
+    v = _f(x)
+    if v is None:
+        return "---"
+    return f"{v:.{nd}f}"
+
+
+def write_baseline_latex_tables(
+    df: pd.DataFrame,
+    out_corr: Path,
+    out_mse: Path,
+    training_pct: float = 100.0,
+    nd: int = 3,
+) -> None:
+    """
+    Two LaTeX fragments for thesis: (1) Pearson rho variance vs moment-matched batch entropy;
+    (2) single MSE table (identical for both decompositions when both present).
+
+    Expects columns from ``build_rows`` / ``rows_to_dataframe`` including
+    ``function``, ``noise``, ``model``, ``training_pct``, ``rho_var``, ``rho_ent_mm``,
+    ``MSE_var`` (and optionally ``MSE_ent_mm``).
+    """
+    sub = df[np.isclose(pd.to_numeric(df["training_pct"], errors="coerce"), training_pct, rtol=0, atol=1e-6)]
+    lines_corr = [
+        "% Requires \\usepackage{booktabs}",
+        "% Entropy rho/MSE from entropy_recomputed_moment_matched_batch/statistics "
+        "(*moment_matched_entropy_sample_size*.xlsx)",
+        "",
+        r"\begin{table}[htbp]",
+        r"\centering",
+        r"\small",
+        rf"\caption{{Sample-size baseline ({training_pct:g}\,\% training): Pearson $\rho$ "
+        rf"(epistemic vs aleatoric). Variance from \texttt{{results/sample\_size/statistics}}; "
+        rf"entropy from moment-matched batch recomputation.}}",
+        r"\begin{tabular}{l r r r r}",
+        r"\toprule",
+        r"& \multicolumn{2}{c}{Linear} & \multicolumn{2}{c}{Sinusoidal} \\",
+        r"\cmidrule(lr){2-3}\cmidrule(lr){4-5}",
+        r"\textbf{Model} & Homo. & Hetero. & Homo. & Hetero. \\",
+        r"\midrule",
+        r"\multicolumn{5}{l}{\textit{Variance}} \\",
+    ]
+    for model in MODEL_ORDER:
+        cells = []
+        for func_type, noise_type in CONDITIONS:
+            row = sub[(sub["function"] == func_type) & (sub["noise"] == noise_type) & (sub["model"] == model)]
+            rho = row["rho_var"].iloc[0] if len(row) else None
+            cells.append(_latex_num(rho, nd))
+        lines_corr.append(
+            model.replace("_", r"\_") + " & " + " & ".join(cells) + r" \\"
+        )
+    lines_corr.extend(
+        [
+            r"\midrule",
+            r"\multicolumn{5}{l}{\textit{Entropy (moment-matched batch)}} \\",
+        ]
+    )
+    for model in MODEL_ORDER:
+        cells = []
+        for func_type, noise_type in CONDITIONS:
+            row = sub[(sub["function"] == func_type) & (sub["noise"] == noise_type) & (sub["model"] == model)]
+            rho = row["rho_ent_mm"].iloc[0] if len(row) else None
+            cells.append(_latex_num(rho, nd))
+        lines_corr.append(
+            model.replace("_", r"\_") + " & " + " & ".join(cells) + r" \\"
+        )
+    lines_corr.extend([r"\bottomrule", r"\end{tabular}", r"\end{table}", ""])
+
+    lines_mse = [
+        "% Requires \\usepackage{booktabs}",
+        "% MSE identical for variance and moment-matched entropy (same predictive mean vs true curve).",
+        "",
+        r"\begin{table}[htbp]",
+        r"\centering",
+        r"\small",
+        rf"\caption{{Sample-size baseline ({training_pct:g}\,\% training): MSE of predictive mean vs.\ true $f(x)$ on the grid.}}",
+        r"\begin{tabular}{l r r r r}",
+        r"\toprule",
+        r"\textbf{Model} & \multicolumn{2}{c}{Linear} & \multicolumn{2}{c}{Sinusoidal} \\",
+        r"\cmidrule(lr){2-3}\cmidrule(lr){4-5}",
+        r"& Homo. & Hetero. & Homo. & Hetero. \\",
+        r"\midrule",
+    ]
+    for model in MODEL_ORDER:
+        cells = []
+        for func_type, noise_type in CONDITIONS:
+            row = sub[(sub["function"] == func_type) & (sub["noise"] == noise_type) & (sub["model"] == model)]
+            mse = row["MSE_var"].iloc[0] if len(row) else None
+            cells.append(_latex_num(mse, nd))
+        lines_mse.append(
+            model.replace("_", r"\_") + " & " + " & ".join(cells) + r" \\"
+        )
+    lines_mse.extend([r"\bottomrule", r"\end{tabular}", r"\end{table}", ""])
+
+    out_corr = Path(out_corr).resolve()
+    out_mse = Path(out_mse).resolve()
+    out_corr.parent.mkdir(parents=True, exist_ok=True)
+    out_mse.parent.mkdir(parents=True, exist_ok=True)
+    out_corr.write_text("\n".join(lines_corr), encoding="utf-8")
+    out_mse.write_text("\n".join(lines_mse), encoding="utf-8")
+
+
 def build_markdown(rows: List[Dict[str, Any]]) -> str:
     lines: List[str] = [
         "# Sample size experiment — summary metrics (variance vs moment-matched entropy)",
@@ -347,6 +455,37 @@ def main() -> None:
         default=None,
         help="Save AU line-plot overview PNG. Pass a path, or use flag with no value for default path.",
     )
+    parser.add_argument(
+        "--out-tex-corr",
+        type=Path,
+        default=project_root
+        / "results"
+        / "sample_size"
+        / "tables"
+        / "sample_size_baseline_100_corr_var_vs_mm_entropy.tex",
+        help="LaTeX: rho table (variance + moment-matched batch entropy).",
+    )
+    parser.add_argument(
+        "--out-tex-mse",
+        type=Path,
+        default=project_root
+        / "results"
+        / "sample_size"
+        / "tables"
+        / "sample_size_baseline_100_mse.tex",
+        help="LaTeX: single MSE table (same for both decompositions).",
+    )
+    parser.add_argument(
+        "--baseline-pct",
+        type=float,
+        default=100.0,
+        help="Training %% row to export for LaTeX tables (default 100).",
+    )
+    parser.add_argument(
+        "--no-tex",
+        action="store_true",
+        help="Skip writing baseline LaTeX fragments.",
+    )
     args = parser.parse_args()
     mm_root = Path(args.stats_mm).resolve()
     rows = build_rows(mm_root)
@@ -361,6 +500,16 @@ def main() -> None:
     df.to_csv(out_csv, index=False, float_format="%.6f")
     print("Wrote", out_md)
     print("Wrote", out_csv, f"({len(df)} rows)")
+
+    if not args.no_tex:
+        write_baseline_latex_tables(
+            df,
+            Path(args.out_tex_corr),
+            Path(args.out_tex_mse),
+            training_pct=args.baseline_pct,
+        )
+        print("Wrote", Path(args.out_tex_corr).resolve())
+        print("Wrote", Path(args.out_tex_mse).resolve())
     if args.figure_out:
         fp = Path(args.figure_out).resolve()
         save_au_overview_figure(df, fp)
