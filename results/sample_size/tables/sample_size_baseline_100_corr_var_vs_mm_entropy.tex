@@ -1,0 +1,27 @@
+% Requires \usepackage{booktabs}
+% Entropy rho/MSE from entropy_recomputed_moment_matched_batch/statistics (*moment_matched_entropy_sample_size*.xlsx)
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Sample-size baseline (100\,\% training): Pearson $\rho$ (epistemic vs aleatoric). Variance from \texttt{results/sample\_size/statistics}; entropy from moment-matched batch recomputation.}
+\begin{tabular}{l r r r r}
+\toprule
+& \multicolumn{2}{c}{Linear} & \multicolumn{2}{c}{Sinusoidal} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+\textbf{Model} & Homo. & Hetero. & Homo. & Hetero. \\
+\midrule
+\multicolumn{5}{l}{\textit{Variance}} \\
+Deep Ensemble & 0.396 & 0.033 & 0.754 & -0.096 \\
+MC Dropout & 0.943 & -0.130 & 0.862 & 0.888 \\
+BNN & 0.396 & 0.968 & 0.178 & 0.156 \\
+BAMLSS & 0.409 & -0.144 & 0.355 & -0.240 \\
+\midrule
+\multicolumn{5}{l}{\textit{Entropy (moment-matched batch)}} \\
+Deep Ensemble & 0.303 & -0.717 & 0.686 & -0.364 \\
+MC Dropout & 0.919 & -0.595 & 0.205 & -0.364 \\
+BNN & 0.134 & -0.795 & -0.805 & -0.853 \\
+BAMLSS & -0.033 & 0.002 & 0.024 & 0.022 \\
+\bottomrule
+\end{tabular}
+\end{table}

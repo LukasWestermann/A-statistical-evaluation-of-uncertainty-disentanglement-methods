@@ -431,9 +431,12 @@ def bnn_classification_gl(x, y=None, hidden_width=32, weight_scale=1.0, num_clas
     pyro.deterministic("mu", mu)
     pyro.deterministic("sigma2", sigma2)
 
-    z = pyro.sample("z", dist.Normal(mu, torch.sqrt(sigma2)).to_event(1))
-    with pyro.plate("data", N):
-        pyro.sample("obs", dist.Categorical(logits=z), obs=y)
+    # Train: z + labels. Predict (y is None): only mu/sigma2 needed; avoids conditioning on z
+    # from MCMC with training batch size when evaluating a larger grid (e.g. ring OOD 100x100).
+    if y is not None:
+        z = pyro.sample("z", dist.Normal(mu, torch.sqrt(sigma2)).to_event(1))
+        with pyro.plate("data", N):
+            pyro.sample("obs", dist.Categorical(logits=z), obs=y)
 
 
 def train_bnn_it(
@@ -501,6 +504,10 @@ def bnn_predict_gl(
 ) -> Tuple[np.ndarray, np.ndarray]:
     x_t = torch.from_numpy(x).float()
     samples = mcmc.get_samples()
+    # Drop batch-shaped latents and deterministics so Predictive recomputes them for this x (any N).
+    samples = {
+        k: v for k, v in samples.items() if k not in ("mu", "sigma2", "z")
+    }
     predictive = Predictive(bnn_classification_gl, posterior_samples=samples, return_sites=("mu", "sigma2"))
     preds = predictive(x=x_t, hidden_width=hidden_width, weight_scale=weight_scale, num_classes=num_classes)
     mu = preds["mu"].detach().cpu().numpy()       # [S, N, K]
