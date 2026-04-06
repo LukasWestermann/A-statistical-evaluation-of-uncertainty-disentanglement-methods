@@ -966,7 +966,7 @@ def run_mc_dropout_sample_size_experiment(
                 )
         
         # Compute and save variance-based statistics
-        variance_stats_df, _ = compute_and_save_statistics(
+        compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
             mse_by_pct=mse_by_pct,
@@ -977,7 +977,7 @@ def run_mc_dropout_sample_size_experiment(
         )
         
         # Compute and save entropy-based statistics
-        entropy_stats_df, _ = compute_and_save_statistics_entropy(
+        compute_and_save_statistics_entropy(
             uncertainties_entropy_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'MC_Dropout',
             mse_by_pct=mse_by_pct,
@@ -1315,7 +1315,7 @@ def run_deep_ensemble_sample_size_experiment(
                 )
         
         # Compute and save variance-based statistics
-        variance_stats_df, _ = compute_and_save_statistics(
+        compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
             mse_by_pct=mse_by_pct,
@@ -1326,7 +1326,7 @@ def run_deep_ensemble_sample_size_experiment(
         )
         
         # Compute and save entropy-based statistics
-        entropy_stats_df, _ = compute_and_save_statistics_entropy(
+        compute_and_save_statistics_entropy(
             uncertainties_entropy_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'Deep_Ensemble',
             mse_by_pct=mse_by_pct,
@@ -1666,7 +1666,7 @@ def run_bnn_sample_size_experiment(
                 )
         
         # Compute and save variance-based statistics
-        variance_stats_df, _ = compute_and_save_statistics(
+        compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'BNN',
             mse_by_pct=mse_by_pct,
@@ -1677,7 +1677,7 @@ def run_bnn_sample_size_experiment(
         )
         
         # Compute and save entropy-based statistics
-        entropy_stats_df, _ = compute_and_save_statistics_entropy(
+        compute_and_save_statistics_entropy(
             uncertainties_entropy_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'BNN',
             mse_by_pct=mse_by_pct,
@@ -1993,7 +1993,7 @@ def run_bamlss_sample_size_experiment(
                 )
         
         # Compute and save variance-based statistics
-        variance_stats_df, _ = compute_and_save_statistics(
+        compute_and_save_statistics(
             uncertainties_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
             mse_by_pct=mse_by_pct,
@@ -2004,7 +2004,7 @@ def run_bamlss_sample_size_experiment(
         )
         
         # Compute and save entropy-based statistics
-        entropy_stats_df, _ = compute_and_save_statistics_entropy(
+        compute_and_save_statistics_entropy(
             uncertainties_entropy_by_pct, percentages,
             function_names[func_type], noise_type, func_type, 'BAMLSS',
             mse_by_pct=mse_by_pct,

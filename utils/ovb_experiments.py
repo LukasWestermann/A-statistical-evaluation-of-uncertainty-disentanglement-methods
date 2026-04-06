@@ -737,6 +737,10 @@ def run_mc_dropout_ovb_rho_experiment(
                 rho=rho, beta2=beta2, func_type=func_type, noise_type=noise_type,
                 results_dir=save_dir, param_name='rho',
                 model_name='MC_Dropout', entropy_method=entropy_method,
+                mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
+                X_full=X_full,
+                mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
+                X_grid_2d=X_grid_2d, Z_grid_2d=Z_grid_2d,
             )
     
     results_df = pd.DataFrame(summary_rows)
@@ -1126,6 +1130,10 @@ def run_mc_dropout_ovb_beta2_experiment(
                 rho=rho, beta2=beta2_val, func_type=func_type, noise_type=noise_type,
                 results_dir=save_dir, param_name='beta2',
                 model_name='MC_Dropout', entropy_method=entropy_method,
+                mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
+                X_full=X_full,
+                mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
+                X_grid_2d=X_grid_2d, Z_grid_2d=Z_grid_2d,
             )
 
     results_df = pd.DataFrame(summary_rows)
