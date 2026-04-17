@@ -3,6 +3,8 @@ Recompute AU/EU via moment-matched analytical TU (E[sigma^2]+Var(mu) -> Gaussian
 from saved regression raw_outputs .npz.
 
 Batch mirrors recompute_entropy_numerical_batch_from_npz (stats, normalized regions, 2x4 panels).
+Supports OVB via --experiments ovb: omitted-variable ``ovb_outputs*.npz`` only (grid ``mu_samples``/``sigma2_samples``),
+no ID/OOD split; normalized AU/EU use **pooled** min--max over all rho at fixed beta2 within each model/noise/func folder.
 
 Single file:
     python scripts/recompute_entropy_moment_matched_batch_from_npz.py [path/to/file.npz]
@@ -47,10 +49,14 @@ from utils.moment_matched_2x4_entropy_panels import (
 from utils.knn_entropy_regression import (
     CONDITIONS_4,
     DEFAULT_OOD_RANGES,
+    KnnGridResult,
     MODEL_RESOLVERS,
+    OvbMomentMatchedRecord,
     build_noise_level_entropy_dataframe,
+    build_ovb_moment_matched_entropy_dataframe_pooled,
     build_sample_size_entropy_dataframe,
     build_undersampling_approx_dataframe,
+    collect_ovb_npz_files,
     collect_raw_npz_files,
     compute_moment_matched_grid_result,
     create_1x4_variance_panel,
@@ -80,6 +86,11 @@ NOTE_SAMPLE_SIZE = "from raw_outputs moment-matched analytical entropy"
 NOTE_NOISE_LEVEL = "from raw_outputs moment-matched analytical entropy"
 NOTE_UNDERSAMPLING = (
     "undersampling npz single grid; not split by sampling regions; moment-matched analytical entropy"
+)
+NOTE_OVB = (
+    "OVB omitted grid: moment-matched analytical entropy; no ID/OOD; "
+    "min-max AU/EU normalized with global bounds pooled over all rho at fixed beta2 "
+    "(per model/noise/func directory); Pearson corr on raw entropies; MSE vs y_grid_clean"
 )
 
 TAG_TO_DISPLAY = {tag: disp for disp, tag, _ in MODEL_RESOLVERS}
@@ -156,7 +167,7 @@ def run_batch(
     tables_dir = out_root / "tables"
     tables_dir.mkdir(parents=True, exist_ok=True)
 
-    aggregate: Dict[str, List[dict]] = {k: [] for k in ("ood", "sample_size", "noise_level", "undersampling")}
+    aggregate: Dict[str, List[dict]] = {k: [] for k in ("ood", "sample_size", "noise_level", "undersampling", "ovb")}
 
     exp_set = {e.strip().lower() for e in experiments}
 
@@ -169,6 +180,8 @@ def run_batch(
         configs.append(("noise_level", project_root / "results" / "noise_level" / "outputs" / "noise_level", [], "Noise level"))
     if "undersampling" in exp_set:
         configs.append(("undersampling", project_root / "results" / "undersampling" / "outputs" / "undersampling", [], "Undersampling"))
+    if "ovb" in exp_set:
+        configs.append(("ovb", project_root / "results" / "ovb", list(ood_ranges), "OVB"))
 
     print(
         "Batch moment-matched entropy: analytical (fast). Use --grid-stride if needed.",
@@ -179,12 +192,21 @@ def run_batch(
 
     for key, base, panel_ood_ranges, title_short in configs:
         for func_type, noise_type in CONDITIONS_4:
-            search_dir = base / noise_type / func_type
-            if not search_dir.exists():
-                continue
-
-            all_npz = collect_raw_npz_files(search_dir)
-            ranges_for_entropy = list(ood_ranges) if key == "ood" else list(panel_ood_ranges)
+            if key == "ovb":
+                search_dir = None
+                all_npz = []
+            else:
+                search_dir = base / noise_type / func_type
+                if not search_dir.exists():
+                    continue
+                all_npz = collect_raw_npz_files(search_dir)
+            if key == "ood":
+                ranges_for_entropy = list(ood_ranges)
+            elif key == "ovb":
+                # OVB evaluation grid is not an OOD experiment; do not split x by OOD ranges.
+                ranges_for_entropy = []
+            else:
+                ranges_for_entropy = list(panel_ood_ranges)
             ranges_for_panels = ranges_for_entropy
 
             if key == "ood":
@@ -565,6 +587,101 @@ def run_batch(
                     out_sub = stats_root / key / noise_type / func_type
                     save_stats_excel(df, out_sub, f"{date}_{mp}_moment_matched_entropy_{sanitize_stem(npz_path.stem)}")
 
+            elif key == "ovb":
+                model_dir_to_tag = {
+                    "mcdropout": "MC_Dropout",
+                    "deep_ensemble": "Deep_Ensemble",
+                    "bnn": "BNN",
+                    "bamlss": "BAMLSS",
+                }
+                for model_dir, model_tag in model_dir_to_tag.items():
+                    if not _model_ok(model_tag):
+                        continue
+                    ovb_dir = base / model_dir / noise_type / func_type
+                    if not ovb_dir.exists():
+                        continue
+                    ovb_npz = collect_ovb_npz_files(ovb_dir)
+                    records: List[OvbMomentMatchedRecord] = []
+                    plot_pairs: List[Tuple[Path, KnnGridResult]] = []
+                    meta_last: Dict = {}
+                    for npz_path in sorted(ovb_npz, key=lambda p: p.name):
+                        try:
+                            res = compute_moment_matched_grid_result(
+                                npz_path, ranges_for_entropy, grid_stride, eps
+                            )
+                        except Exception as e:
+                            print(f"[{key}] skip {npz_path.name}: {e}")
+                            continue
+
+                        meta = res.meta
+                        meta_last = dict(meta) if meta else {}
+                        model_name = str(meta.get("model_name") or model_tag)
+                        rel = str(npz_path.relative_to(project_root)) if npz_path.is_relative_to(project_root) else str(npz_path)
+
+                        with np.load(npz_path, allow_pickle=True) as data:
+                            rho = float(np.asarray(data["rho"]).ravel()[0]) if "rho" in data.files else None
+                            beta2 = float(np.asarray(data["beta2"]).ravel()[0]) if "beta2" in data.files else None
+
+                        records.append(
+                            OvbMomentMatchedRecord(
+                                npz_stem=npz_path.stem,
+                                npz_relpath=rel,
+                                rho=rho,
+                                beta2=beta2,
+                                ale_entropy=res.ale_entropy,
+                                epi_entropy=res.epi_entropy,
+                                mu_pred=res.mu_pred,
+                                y_clean_flat=res.y_clean_flat,
+                            )
+                        )
+                        plot_pairs.append((npz_path, res))
+
+                    if not records:
+                        continue
+
+                    df = build_ovb_moment_matched_entropy_dataframe_pooled(
+                        records,
+                        model_name,
+                        date,
+                        function_display(func_type),
+                        noise_type,
+                        func_type,
+                        meta_last.get("dropout_p"),
+                        meta_last.get("mc_samples"),
+                        meta_last.get("n_nets"),
+                        recompute_note=NOTE_OVB,
+                    )
+                    mp = model_prefix_for_filename(
+                        model_name,
+                        meta_last.get("dropout_p"),
+                        meta_last.get("mc_samples"),
+                        meta_last.get("n_nets"),
+                    )
+                    out_sub = stats_root / key / noise_type / func_type
+                    for _, row in df.iterrows():
+                        aggregate["ovb"].append(row.to_dict())
+                        stem = row.get("npz_stem", "")
+                        one = pd.DataFrame([row])
+                        save_stats_excel(
+                            one,
+                            out_sub,
+                            f"{date}_{mp}_moment_matched_entropy_{sanitize_stem(str(stem))}",
+                        )
+                    if per_npz_plots:
+                        pdir = plots_root / key / noise_type / func_type / "per_npz"
+                        for npz_path, res in plot_pairs:
+                            plot_entropy_lines(
+                                res.x,
+                                res.ale_entropy,
+                                res.epi_entropy,
+                                res.tot_entropy,
+                                pdir / f"moment_matched_{npz_path.stem}.png",
+                                "Entropy (OVB omitted)",
+                                ranges_for_entropy,
+                            )
+
+            if key == "ovb":
+                continue
             display_names = [m[0] for m in MODEL_RESOLVERS]
             condition_data_list: List = []
             for _disp, _tag, globs in MODEL_RESOLVERS:
@@ -642,7 +759,7 @@ def main():
     parser.add_argument("--batch", action="store_true")
     parser.add_argument(
         "--experiments",
-        default="ood,sample_size,noise_level,undersampling",
+        default="ood,sample_size,noise_level,undersampling,ovb",
         help="Comma-separated experiment keys",
     )
     parser.add_argument("--grid-stride", type=int, default=1)
@@ -694,7 +811,7 @@ def main():
         if not npz_path.is_file():
             print("File not found:", npz_path)
             sys.exit(1)
-        if is_ovb_or_non_raw_path(npz_path):
+        if is_ovb_or_non_raw_path(npz_path) and "ovb_outputs" not in npz_path.name.lower():
             print("Refusing OVB or non-raw_outputs path:", npz_path)
             sys.exit(1)
     else:

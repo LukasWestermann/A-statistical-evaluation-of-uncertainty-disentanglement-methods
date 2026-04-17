@@ -12,6 +12,9 @@ Usage:
 
 Outputs under results/ood/plots/ with prefix entropy_recomputed_moment_matched_ (compare with
 entropy_recomputed_formula_* from recompute_entropy_formula_from_npz.py).
+For OVB files (ovb_outputs*.npz), omitted entropy is recomputed from mu_samples/sigma2_samples.
+If full-model keys are present, a second set of *_full_* plots is saved from
+mu_samples_full/sigma2_samples_full on X_full.
 """
 from __future__ import annotations
 
@@ -128,6 +131,30 @@ def process_one_npz(npz_path: Path, save_dir: Path) -> None:
     saved = plot_entropy_lines(x, ale, epi, tot, save_path=out_path)
     for p in saved:
         print("Saved plot:", p)
+
+    is_ovb = "ovb_outputs" in npz_path.name.lower()
+    if not is_ovb:
+        return
+
+    full_keys = {"mu_samples_full", "sigma2_samples_full", "X_full"}
+    if not full_keys.issubset(set(data.files)):
+        print("OVB full-model keys missing; skipped full-model recomputation for:", npz_path.name)
+        return
+
+    mu_samples_full = np.asarray(data["mu_samples_full"])
+    sigma2_samples_full = np.asarray(data["sigma2_samples_full"])
+    x_full = np.asarray(data["X_full"])
+    x_grid_full = x_full[:, :1] if x_full.ndim > 1 else x_full.reshape(-1, 1)
+    mu_samples_full, sigma2_samples_full = _ensure_samples_first(mu_samples_full, sigma2_samples_full, x_grid_full)
+    ent_full = entropy_uncertainty_analytical_moment_matched(mu_samples_full, sigma2_samples_full)
+    ale_full = np.asarray(ent_full["aleatoric"]).squeeze()
+    epi_full = np.asarray(ent_full["epistemic"]).squeeze()
+    tot_full = np.asarray(ent_full["total"]).squeeze()
+    x_full_line = _x_line(x_grid_full)
+    out_full_path = save_dir / f"entropy_recomputed_moment_matched_full_{npz_path.stem}.png"
+    saved_full = plot_entropy_lines(x_full_line, ale_full, epi_full, tot_full, save_path=out_full_path)
+    for p in saved_full:
+        print("Saved full-model plot:", p)
 
 
 def main():

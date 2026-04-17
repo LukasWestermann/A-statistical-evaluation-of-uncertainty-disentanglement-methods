@@ -596,21 +596,21 @@ def run_mc_dropout_ovb_rho_experiment(
             'ale_entropy_2d_grid': ale_entropy_2d_grid, 'epi_entropy_2d_grid': epi_entropy_2d_grid, 'tot_entropy_2d_grid': tot_entropy_2d_grid,
         }
         
-        # Compute normalized uncertainties for omitted model
+        # Normalized AU/EU per grid; TU_norm = AU_norm + EU_norm (not min-max on total uncertainty)
         ale_var_norm = _normalize_minmax(ale_var)
         epi_var_norm = _normalize_minmax(epi_var)
-        tot_var_norm = _normalize_minmax(tot_var)
+        tot_var_norm = ale_var_norm + epi_var_norm
         ale_entropy_norm = _normalize_minmax(ale_entropy)
         epi_entropy_norm = _normalize_minmax(epi_entropy)
-        tot_entropy_norm = _normalize_minmax(tot_entropy)
+        tot_entropy_norm = ale_entropy_norm + epi_entropy_norm
         
         # Compute normalized uncertainties for full model
         ale_var_full_norm = _normalize_minmax(ale_var_full)
         epi_var_full_norm = _normalize_minmax(epi_var_full)
-        tot_var_full_norm = _normalize_minmax(tot_var_full)
+        tot_var_full_norm = ale_var_full_norm + epi_var_full_norm
         ale_entropy_full_norm = _normalize_minmax(ale_entropy_full)
         epi_entropy_full_norm = _normalize_minmax(epi_entropy_full)
-        tot_entropy_full_norm = _normalize_minmax(tot_entropy_full)
+        tot_entropy_full_norm = ale_entropy_full_norm + epi_entropy_full_norm
         
         # Compute inflation ratios (how much OVB inflates uncertainty)
         mean_ale_var_full = np.mean(ale_var_full)
@@ -989,21 +989,21 @@ def run_mc_dropout_ovb_beta2_experiment(
             'ale_entropy_2d_grid': ale_entropy_2d_grid, 'epi_entropy_2d_grid': epi_entropy_2d_grid, 'tot_entropy_2d_grid': tot_entropy_2d_grid,
         }
         
-        # Compute normalized uncertainties for omitted model
+        # Normalized AU/EU per grid; TU_norm = AU_norm + EU_norm (not min-max on total uncertainty)
         ale_var_norm = _normalize_minmax(ale_var)
         epi_var_norm = _normalize_minmax(epi_var)
-        tot_var_norm = _normalize_minmax(tot_var)
+        tot_var_norm = ale_var_norm + epi_var_norm
         ale_entropy_norm = _normalize_minmax(ale_entropy)
         epi_entropy_norm = _normalize_minmax(epi_entropy)
-        tot_entropy_norm = _normalize_minmax(tot_entropy)
+        tot_entropy_norm = ale_entropy_norm + epi_entropy_norm
         
         # Compute normalized uncertainties for full model
         ale_var_full_norm = _normalize_minmax(ale_var_full)
         epi_var_full_norm = _normalize_minmax(epi_var_full)
-        tot_var_full_norm = _normalize_minmax(tot_var_full)
+        tot_var_full_norm = ale_var_full_norm + epi_var_full_norm
         ale_entropy_full_norm = _normalize_minmax(ale_entropy_full)
         epi_entropy_full_norm = _normalize_minmax(epi_entropy_full)
-        tot_entropy_full_norm = _normalize_minmax(tot_entropy_full)
+        tot_entropy_full_norm = ale_entropy_full_norm + epi_entropy_full_norm
         
         # Compute inflation ratios (how much OVB inflates uncertainty)
         mean_ale_var_full = np.mean(ale_var_full)
@@ -1323,20 +1323,21 @@ def run_deep_ensemble_ovb_rho_experiment(
             'ale_entropy_2d_grid': entropy_2d['aleatoric'].reshape(grid_shape), 'epi_entropy_2d_grid': entropy_2d['epistemic'].reshape(grid_shape), 'tot_entropy_2d_grid': entropy_2d['total'].reshape(grid_shape),
         }
         
+        # Normalized AU/EU; TU_norm = AU_norm + EU_norm (not min-max on total)
         # Compute normalized uncertainties and inflation
         ale_var_norm = _normalize_minmax(ale_var)
         epi_var_norm = _normalize_minmax(epi_var)
-        tot_var_norm = _normalize_minmax(tot_var)
+        tot_var_norm = ale_var_norm + epi_var_norm
         ale_var_full_norm = _normalize_minmax(ale_var_full)
         epi_var_full_norm = _normalize_minmax(epi_var_full)
-        tot_var_full_norm = _normalize_minmax(tot_var_full)
+        tot_var_full_norm = ale_var_full_norm + epi_var_full_norm
         
         ale_entropy_norm = _normalize_minmax(ale_entropy)
         epi_entropy_norm = _normalize_minmax(epi_entropy)
-        tot_entropy_norm = _normalize_minmax(tot_entropy)
+        tot_entropy_norm = ale_entropy_norm + epi_entropy_norm
         ale_entropy_full_norm = _normalize_minmax(ale_entropy_full)
         epi_entropy_full_norm = _normalize_minmax(epi_entropy_full)
-        tot_entropy_full_norm = _normalize_minmax(tot_entropy_full)
+        tot_entropy_full_norm = ale_entropy_full_norm + epi_entropy_full_norm
         
         mean_ale_var_full = np.mean(ale_var_full)
         mean_epi_var_full = np.mean(epi_var_full)
@@ -1549,16 +1550,16 @@ def run_deep_ensemble_ovb_beta2_experiment(
         # Normalized and inflation
         ale_var_norm = _normalize_minmax(ale_var)
         epi_var_norm = _normalize_minmax(epi_var)
-        tot_var_norm = _normalize_minmax(tot_var)
+        tot_var_norm = ale_var_norm + epi_var_norm
         ale_var_full_norm = _normalize_minmax(ale_var_full)
         epi_var_full_norm = _normalize_minmax(epi_var_full)
-        tot_var_full_norm = _normalize_minmax(tot_var_full)
+        tot_var_full_norm = ale_var_full_norm + epi_var_full_norm
         ale_entropy_norm = _normalize_minmax(ale_entropy)
         epi_entropy_norm = _normalize_minmax(epi_entropy)
-        tot_entropy_norm = _normalize_minmax(tot_entropy)
+        tot_entropy_norm = ale_entropy_norm + epi_entropy_norm
         ale_entropy_full_norm = _normalize_minmax(ale_entropy_full)
         epi_entropy_full_norm = _normalize_minmax(epi_entropy_full)
-        tot_entropy_full_norm = _normalize_minmax(tot_entropy_full)
+        tot_entropy_full_norm = ale_entropy_full_norm + epi_entropy_full_norm
         
         mean_ale_var_full = np.mean(ale_var_full)
         mean_epi_var_full = np.mean(epi_var_full)
@@ -1772,19 +1773,20 @@ def run_bnn_ovb_rho_experiment(
             'ale_entropy_2d_grid': entropy_2d['aleatoric'].reshape(grid_shape), 'epi_entropy_2d_grid': entropy_2d['epistemic'].reshape(grid_shape), 'tot_entropy_2d_grid': entropy_2d['total'].reshape(grid_shape),
         }
         
+        # Normalized AU/EU; TU_norm = AU_norm + EU_norm (not min-max on total)
         # Compute normalized uncertainties and inflation
         ale_var_norm = _normalize_minmax(ale_var)
         epi_var_norm = _normalize_minmax(epi_var)
-        tot_var_norm = _normalize_minmax(tot_var)
+        tot_var_norm = ale_var_norm + epi_var_norm
         ale_var_full_norm = _normalize_minmax(ale_var_full)
         epi_var_full_norm = _normalize_minmax(epi_var_full)
-        tot_var_full_norm = _normalize_minmax(tot_var_full)
+        tot_var_full_norm = ale_var_full_norm + epi_var_full_norm
         ale_entropy_norm = _normalize_minmax(ale_entropy)
         epi_entropy_norm = _normalize_minmax(epi_entropy)
-        tot_entropy_norm = _normalize_minmax(tot_entropy)
+        tot_entropy_norm = ale_entropy_norm + epi_entropy_norm
         ale_entropy_full_norm = _normalize_minmax(ale_entropy_full)
         epi_entropy_full_norm = _normalize_minmax(epi_entropy_full)
-        tot_entropy_full_norm = _normalize_minmax(tot_entropy_full)
+        tot_entropy_full_norm = ale_entropy_full_norm + epi_entropy_full_norm
         
         mean_ale_var_full = np.mean(ale_var_full)
         mean_epi_var_full = np.mean(epi_var_full)
@@ -1999,16 +2001,16 @@ def run_bnn_ovb_beta2_experiment(
         # Normalized and inflation
         ale_var_norm = _normalize_minmax(ale_var)
         epi_var_norm = _normalize_minmax(epi_var)
-        tot_var_norm = _normalize_minmax(tot_var)
+        tot_var_norm = ale_var_norm + epi_var_norm
         ale_var_full_norm = _normalize_minmax(ale_var_full)
         epi_var_full_norm = _normalize_minmax(epi_var_full)
-        tot_var_full_norm = _normalize_minmax(tot_var_full)
+        tot_var_full_norm = ale_var_full_norm + epi_var_full_norm
         ale_entropy_norm = _normalize_minmax(ale_entropy)
         epi_entropy_norm = _normalize_minmax(epi_entropy)
-        tot_entropy_norm = _normalize_minmax(tot_entropy)
+        tot_entropy_norm = ale_entropy_norm + epi_entropy_norm
         ale_entropy_full_norm = _normalize_minmax(ale_entropy_full)
         epi_entropy_full_norm = _normalize_minmax(epi_entropy_full)
-        tot_entropy_full_norm = _normalize_minmax(tot_entropy_full)
+        tot_entropy_full_norm = ale_entropy_full_norm + epi_entropy_full_norm
         
         mean_ale_var_full = np.mean(ale_var_full)
         mean_epi_var_full = np.mean(epi_var_full)
@@ -2213,19 +2215,20 @@ def run_bamlss_ovb_rho_experiment(
             'ale_entropy_2d_grid': entropy_2d['aleatoric'].reshape(grid_shape), 'epi_entropy_2d_grid': entropy_2d['epistemic'].reshape(grid_shape), 'tot_entropy_2d_grid': entropy_2d['total'].reshape(grid_shape),
         }
         
+        # Normalized AU/EU; TU_norm = AU_norm + EU_norm (not min-max on total)
         # Compute normalized uncertainties and inflation
         ale_var_norm = _normalize_minmax(ale_var)
         epi_var_norm = _normalize_minmax(epi_var)
-        tot_var_norm = _normalize_minmax(tot_var)
+        tot_var_norm = ale_var_norm + epi_var_norm
         ale_var_full_norm = _normalize_minmax(ale_var_full)
         epi_var_full_norm = _normalize_minmax(epi_var_full)
-        tot_var_full_norm = _normalize_minmax(tot_var_full)
+        tot_var_full_norm = ale_var_full_norm + epi_var_full_norm
         ale_entropy_norm = _normalize_minmax(ale_entropy)
         epi_entropy_norm = _normalize_minmax(epi_entropy)
-        tot_entropy_norm = _normalize_minmax(tot_entropy)
+        tot_entropy_norm = ale_entropy_norm + epi_entropy_norm
         ale_entropy_full_norm = _normalize_minmax(ale_entropy_full)
         epi_entropy_full_norm = _normalize_minmax(epi_entropy_full)
-        tot_entropy_full_norm = _normalize_minmax(tot_entropy_full)
+        tot_entropy_full_norm = ale_entropy_full_norm + epi_entropy_full_norm
         
         mean_ale_var_full = np.mean(ale_var_full)
         mean_epi_var_full = np.mean(epi_var_full)
@@ -2432,16 +2435,16 @@ def run_bamlss_ovb_beta2_experiment(
         # Normalized and inflation
         ale_var_norm = _normalize_minmax(ale_var)
         epi_var_norm = _normalize_minmax(epi_var)
-        tot_var_norm = _normalize_minmax(tot_var)
+        tot_var_norm = ale_var_norm + epi_var_norm
         ale_var_full_norm = _normalize_minmax(ale_var_full)
         epi_var_full_norm = _normalize_minmax(epi_var_full)
-        tot_var_full_norm = _normalize_minmax(tot_var_full)
+        tot_var_full_norm = ale_var_full_norm + epi_var_full_norm
         ale_entropy_norm = _normalize_minmax(ale_entropy)
         epi_entropy_norm = _normalize_minmax(epi_entropy)
-        tot_entropy_norm = _normalize_minmax(tot_entropy)
+        tot_entropy_norm = ale_entropy_norm + epi_entropy_norm
         ale_entropy_full_norm = _normalize_minmax(ale_entropy_full)
         epi_entropy_full_norm = _normalize_minmax(epi_entropy_full)
-        tot_entropy_full_norm = _normalize_minmax(tot_entropy_full)
+        tot_entropy_full_norm = ale_entropy_full_norm + epi_entropy_full_norm
         
         mean_ale_var_full = np.mean(ale_var_full)
         mean_epi_var_full = np.mean(epi_var_full)

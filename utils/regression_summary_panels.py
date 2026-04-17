@@ -614,3 +614,116 @@ def create_noise_level_summary_panel_corr_only(
     fig.suptitle(title, fontsize=14, fontweight="bold", y=1.02)
     plt.tight_layout(rect=[0, 0, 1, 0.94])
     return fig
+
+
+OvbSweepAxis = Literal["rho", "beta2"]
+
+
+def get_ovb_sweep_uncertainty_columns(measure: MeasureType) -> Tuple[str, str, str]:
+    """Column names for AU, EU, and total in OVB parameter DataFrames (variance Excel vs entropy batch Excel)."""
+    if measure == "variance":
+        return "mean_ale_var_norm", "mean_epi_var_norm", "mean_tot_var_norm"
+    return "Avg_Aleatoric_Entropy_norm", "Avg_Epistemic_Entropy_norm", "Avg_Total_Entropy_norm"
+
+
+def _annotate_ovb_sweep_points(ax_, xs, ys, fmt: str = "{:.2f}", dy_scale: float = 0.03):
+    """Point labels with x-offset scaled to the x-range (ρ and β₂ are not percentages)."""
+    if len(xs) == 0:
+        return
+    xs_arr = np.asarray(xs, dtype=float)
+    ys_arr = np.asarray(ys, dtype=float)
+    y_min, y_max = np.min(ys_arr), np.max(ys_arr)
+    x_min, x_max = np.min(xs_arr), np.max(xs_arr)
+    y_span = max(y_max - y_min, 1e-6)
+    x_span = max(x_max - x_min, 1e-9)
+    dx = 0.02 * x_span
+    for x, y in zip(xs_arr, ys_arr):
+        dy = dy_scale * y_span
+        ax_.text(
+            x + dx,
+            y + dy,
+            fmt.format(y),
+            fontsize=9,
+            alpha=0.9,
+            ha="left",
+            va="bottom",
+        )
+
+
+def create_ovb_parameter_sweep_panel_au_eu_tu_only(
+    stats_by_model: Dict[str, pd.DataFrame],
+    func_type: FuncType,
+    noise_type: NoiseType,
+    measure: MeasureType,
+    x_axis: OvbSweepAxis,
+    fixed_param_descriptor: str,
+    uncertainty_ylim: Optional[Tuple[float, float]] = None,
+):
+    """
+    1×4 panel: normalized AU, EU, Total vs. Corr(X, Z) or β₂; one column per model. No correlation row.
+
+    ``fixed_param_descriptor`` is shown in the title, e.g. ``"(β₂=1.0)"`` when varying X–Z correlation
+    or ``"(ρ=0.7)"`` when varying β₂.
+    """
+    model_order = ["Deep Ensemble", "MC Dropout", "BNN", "BAMLSS"]
+    fig, axes = plt.subplots(1, 4, figsize=(18, 3.8), sharex=True)
+    if not isinstance(axes, np.ndarray):
+        axes = np.array([axes])
+
+    au_col, eu_col, tot_col = get_ovb_sweep_uncertainty_columns(measure)
+    if x_axis == "rho":
+        xlabel = "Correlation X–Z"
+        axis_title = "Correlation X–Z"
+    else:
+        xlabel = "β₂"
+        axis_title = "Omitted Z (β₂)"
+
+    for col, model_name in enumerate(model_order):
+        ax = axes[col]
+        df = stats_by_model.get(model_name)
+        if df is None or df.empty:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes, fontsize=11)
+            ax.set_title(model_name, fontweight="bold", fontsize=11)
+            continue
+
+        if x_axis not in df.columns:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes, fontsize=11)
+            ax.set_title(model_name, fontweight="bold", fontsize=11)
+            continue
+
+        xv = df[x_axis].astype(float).values
+
+        if au_col in df.columns:
+            y_au = df[au_col].astype(float).values
+            ax.plot(xv, y_au, "o-", markersize=6, linewidth=2, color="green", label="AU")
+            _annotate_ovb_sweep_points(ax, xv, y_au)
+        if eu_col in df.columns:
+            y_eu = df[eu_col].astype(float).values
+            ax.plot(xv, y_eu, "s-", markersize=6, linewidth=2, color="orange", label="EU")
+            _annotate_ovb_sweep_points(ax, xv, y_eu)
+        if tot_col in df.columns:
+            y_tot = df[tot_col].astype(float).values
+            ax.plot(xv, y_tot, "^-", markersize=6, linewidth=2, color="blue", label="Total")
+            _annotate_ovb_sweep_points(ax, xv, y_tot)
+
+        ax.set_ylabel("Norm. avg uncertainty", fontsize=9)
+        ax.set_title(model_name, fontweight="bold", fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlabel(xlabel, fontsize=9)
+        h, _ = ax.get_legend_handles_labels()
+        if h:
+            ax.legend(fontsize=8, loc="best")
+
+    axes[0].set_ylabel("Norm. avg uncertainty", fontsize=9)
+    func_label = FUNC_NAME_BY_TYPE[func_type]
+    measure_label = "Variance" if measure == "variance" else "Entropy (normalized means)"
+    title = (
+        f"OVB — {axis_title} {fixed_param_descriptor} — "
+        f"{func_label} ({noise_type}) — {measure_label} (AU / EU / Total)"
+    )
+    fig.suptitle(title, fontsize=14, fontweight="bold", y=1.02)
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+    if uncertainty_ylim is not None:
+        for i in range(4):
+            axes[i].set_ylim(*uncertainty_ylim)
+    return fig

@@ -7,6 +7,7 @@ and supports 2x4 panel plotting (variance from samples; entropy from k-NN).
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, List, Optional, Sequence, Tuple, Union
@@ -196,6 +197,107 @@ class KnnGridResult:
     x_train_flat: Optional[np.ndarray]
     y_train_flat: Optional[np.ndarray]
     meta: Dict[str, Any]
+
+
+@dataclass
+class OvbMomentMatchedRecord:
+    """One OVB npz after ``compute_moment_matched_grid_result`` (omitted model on ``x_grid``)."""
+
+    npz_stem: str
+    npz_relpath: str
+    rho: Optional[float]
+    beta2: Optional[float]
+    ale_entropy: np.ndarray
+    epi_entropy: np.ndarray
+    mu_pred: np.ndarray
+    y_clean_flat: np.ndarray
+
+
+def _ovb_beta2_pool_key(beta2: Optional[float]) -> float:
+    """Stable key for grouping rho sweeps at fixed beta2; missing beta2 pools together."""
+    if beta2 is None:
+        return float("nan")
+    return round(float(beta2), 6)
+
+
+def build_ovb_moment_matched_entropy_dataframe_pooled(
+    records: List[OvbMomentMatchedRecord],
+    model_name: str,
+    date: str,
+    function_name: str,
+    noise_type: str,
+    func_type: str,
+    dropout_p: Optional[float],
+    mc_samples: Optional[float],
+    n_nets: Optional[float],
+    recompute_note: str = (
+        "OVB omitted grid: min-max AU and EU separately (pooled over all rho at fixed beta2 "
+        "in same model/noise/func directory); TU_norm = mean(AU_norm)+mean(EU_norm) on grid; "
+        "correlation on raw entropies"
+    ),
+) -> pd.DataFrame:
+    """
+    Sample-size-style normalization: global ale/epi min-max within each beta2 group,
+    then one row per npz. Normalized total entropy is the sum of mean normalized AU and mean
+    normalized EU (not a separate min-max on total entropy).
+    """
+    if not records:
+        return pd.DataFrame()
+
+    def normalize(values: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
+        if vmax - vmin == 0:
+            return np.zeros_like(values, dtype=np.float64)
+        return (values - vmin) / (vmax - vmin)
+
+    by_beta: Dict[float, List[OvbMomentMatchedRecord]] = defaultdict(list)
+    for r in records:
+        by_beta[_ovb_beta2_pool_key(r.beta2)].append(r)
+
+    rows: List[Dict[str, Any]] = []
+    for _bk in sorted(by_beta.keys(), key=lambda x: (np.isnan(x), x)):
+        group = by_beta[_bk]
+        all_ale = np.concatenate([rec.ale_entropy.ravel() for rec in group])
+        all_epi = np.concatenate([rec.epi_entropy.ravel() for rec in group])
+        ale_min, ale_max = float(all_ale.min()), float(all_ale.max())
+        epi_min, epi_max = float(all_epi.min()), float(all_epi.max())
+
+        for rec in group:
+            ale_v = rec.ale_entropy.ravel()
+            epi_v = rec.epi_entropy.ravel()
+            ale_norm = normalize(ale_v, ale_min, ale_max)
+            epi_norm = normalize(epi_v, epi_min, epi_max)
+            avg_au = float(np.mean(ale_norm))
+            avg_eu = float(np.mean(epi_norm))
+            avg_tu = avg_au + avg_eu
+            corr = np.corrcoef(epi_v, ale_v)[0, 1] if ale_v.size > 1 else 0.0
+            if np.isnan(corr):
+                corr = 0.0
+            mp = rec.mu_pred.ravel()
+            yt = rec.y_clean_flat.ravel()
+            mse = float(np.mean((mp - yt) ** 2))
+            rows.append(
+                {
+                    "Region": "OVB_omitted",
+                    "rho": rec.rho,
+                    "beta2": rec.beta2,
+                    "npz_stem": rec.npz_stem,
+                    "npz_relpath": rec.npz_relpath,
+                    "Avg_Aleatoric_Entropy_norm": avg_au,
+                    "Avg_Epistemic_Entropy_norm": avg_eu,
+                    "Avg_Total_Entropy_norm": avg_tu,
+                    "Correlation_Epi_Ale": float(corr),
+                    "MSE": mse,
+                    "regions_approximated": False,
+                    "knn_recompute_note": recompute_note,
+                    "function_name": function_name,
+                    "noise_type": noise_type,
+                    "func_type": func_type,
+                    "model_name": model_name,
+                    "date": date,
+                }
+            )
+
+    return pd.DataFrame(rows)
 
 
 def compute_knn_grid_result(
@@ -406,6 +508,81 @@ def compute_moment_matched_grid_result(
         boundary_x=boundary_x,
         x_train_flat=x_train_flat,
         y_train_flat=y_train_flat,
+        meta=meta,
+    )
+
+
+def compute_moment_matched_ovb_full_training_result(
+    npz_path: Path,
+    ood_ranges: Sequence[Tuple[float, float]],
+    grid_stride: int = 1,
+    eps: float = 1e-10,
+) -> Optional[KnnGridResult]:
+    """
+    OVB full-model recomputation on training inputs.
+
+    Uses mu_samples_full/sigma2_samples_full evaluated on X_full and Y.
+    Returns None when required full-model keys are unavailable.
+    """
+    data = np.load(npz_path, allow_pickle=True)
+    required = ("mu_samples_full", "sigma2_samples_full", "X_full", "Y")
+    if any(k not in data.files for k in required):
+        return None
+
+    mu_samples = np.asarray(data["mu_samples_full"])
+    sigma2_samples = np.asarray(data["sigma2_samples_full"])
+    x_full = np.asarray(data["X_full"])
+    y_full = np.asarray(data["Y"])
+    if x_full.ndim == 1:
+        x_grid = x_full.reshape(-1, 1)
+    else:
+        x_grid = x_full[:, :1]
+    y_grid_clean = y_full
+
+    mu_samples, sigma2_samples = ensure_samples_first(mu_samples, sigma2_samples, x_grid)
+    mu_samples, sigma2_samples, x_grid, y_grid_clean = apply_stride(
+        mu_samples, sigma2_samples, x_grid, y_grid_clean, grid_stride
+    )
+
+    meta = read_npz_metadata(npz_path, data)
+    ent = entropy_uncertainty_analytical_moment_matched(mu_samples, sigma2_samples, eps=eps)
+    ale_entropy = np.asarray(ent["aleatoric"]).squeeze()
+    epi_entropy = np.asarray(ent["epistemic"]).squeeze()
+    tot_entropy = np.asarray(ent["total"]).squeeze()
+
+    mu_pred = np.mean(mu_samples, axis=0).squeeze()
+    ale_var = np.mean(sigma2_samples, axis=0).squeeze()
+    epi_var = np.var(mu_samples, axis=0).squeeze()
+
+    ood_mask = build_ood_mask(x_grid, ood_ranges)
+    id_mask = ~ood_mask
+    x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid.ravel()
+    y_clean_flat = y_grid_clean[:, 0] if y_grid_clean.ndim > 1 else y_grid_clean.ravel()
+
+    boundary_x: List[float] = []
+    if np.any(ood_mask):
+        transitions = np.where(np.diff(ood_mask.astype(int)) != 0)[0]
+        if len(transitions) > 0:
+            boundary_x = list(x[transitions + 1])
+
+    return KnnGridResult(
+        mu_samples=mu_samples,
+        sigma2_samples=sigma2_samples,
+        x_grid=x_grid,
+        y_grid_clean=y_grid_clean,
+        mu_pred=mu_pred,
+        ale_var=ale_var,
+        epi_var=epi_var,
+        ale_entropy=ale_entropy,
+        epi_entropy=epi_entropy,
+        tot_entropy=tot_entropy,
+        ood_mask=ood_mask,
+        id_mask=id_mask,
+        x=x,
+        y_clean_flat=y_clean_flat,
+        boundary_x=boundary_x,
+        x_train_flat=None,
+        y_train_flat=None,
         meta=meta,
     )
 
@@ -639,8 +816,13 @@ def build_undersampling_approx_dataframe(
     mc_samples: Optional[float],
     n_nets: Optional[float],
     recompute_note: str = "undersampling npz has single grid; not split by sampling regions",
+    region_label: str = "full_grid_approx",
 ) -> pd.DataFrame:
-    """Single full-grid 'region' — undersampling multi-region not in npz."""
+    """Single full-grid 'region' — undersampling multi-region not in npz.
+
+    Same min--max normalization over the full grid; correlation on raw AU/EU.
+    ``region_label`` defaults to ``full_grid_approx``; use e.g. ``OVB_omitted`` for OVB.
+    """
     ale_min, ale_max = float(ale.min()), float(ale.max())
     epi_min, epi_max = float(epi.min()), float(epi.max())
 
@@ -657,7 +839,7 @@ def build_undersampling_approx_dataframe(
         corr = 0.0
     mse = float(np.mean((mu_pred - y_true) ** 2))
     return pd.DataFrame([{
-        "Region": "full_grid_approx",
+        "Region": region_label,
         "Avg_Aleatoric_Entropy_norm": float(np.mean(ale_norm)),
         "Avg_Epistemic_Entropy_norm": float(np.mean(epi_norm)),
         "Avg_Total_Entropy_norm": float(np.mean(tot_norm)),
@@ -757,6 +939,13 @@ def collect_raw_npz_files(search_dir: Path) -> List[Path]:
     for p in search_dir.rglob("*raw_outputs*.npz"):
         if not is_ovb_or_non_raw_path(p):
             out.append(p.resolve())
+    return sorted(set(out))
+
+
+def collect_ovb_npz_files(search_dir: Path) -> List[Path]:
+    if not search_dir.exists():
+        return []
+    out = [p.resolve() for p in search_dir.rglob("ovb_outputs*.npz")]
     return sorted(set(out))
 
 
@@ -983,7 +1172,7 @@ def create_1x4_variance_panel(
         axes[col].set_xlabel("x", fontsize=11, fontweight="bold")
     axes[0].set_ylabel(row_ylabel, fontsize=10, fontweight="bold")
     fig.suptitle(
-        f"{experiment_title} — {func_title}, {noise_title} — Variance ({variance_component})",
+        format_2x4_suptitle(experiment_title, func_title, noise_title, f"Variance ({variance_component})"),
         fontsize=14,
         fontweight="bold",
         y=0.995,
