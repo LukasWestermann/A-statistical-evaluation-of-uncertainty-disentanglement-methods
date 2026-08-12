@@ -1,0 +1,38 @@
+\begin{table}
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{AU and EU (omitted, X-only model) vs.\ the X--Z correlation $\rho_{XZ}$ at fixed $\beta_2=1.0$, min--max normalised per model over all swept $\rho_{XZ}$ values pooled. AU falls (\ensuremath{\Delta=-0.2985}) while EU falls (\ensuremath{\Delta=-0.0935}) from first to last swept value.}
+\label{tab:ovb-rho}
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+ & \multicolumn{3}{c}{Deep Ensemble} & \multicolumn{3}{c}{MC Dropout} & \multicolumn{3}{c}{BAMLSS} \\
+\cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10}
+$\rho_{XZ}$ & AU & EU & $\rho$ & AU & EU & $\rho$ & AU & EU & $\rho$ \\
+\midrule
+\multicolumn{10}{l}{\textit{Lin-Hom}} \\
+0 & 0.5418 & 0.2562 & 0.6835 & --- & --- & --- & 0.7541 & 0.2271 & 0.9368 \\
+0.25 & 0.5186 & 0.1845 & -0.4479 & --- & --- & --- & 0.7029 & 0.1908 & 0.1614 \\
+0.75 & 0.2832 & 0.1217 & 0.2256 & --- & --- & --- & 0.3593 & 0.1229 & -0.1420 \\
+1 & 0.1311 & 0.2209 & -0.2296 & --- & --- & --- & 0.0981 & 0.0632 & -0.1617 \\
+\addlinespace
+\multicolumn{10}{l}{\textit{Lin-Het}} \\
+0 & 0.3784 & 0.1876 & 0.5672 & --- & --- & --- & 0.4079 & 0.2465 & -0.0705 \\
+0.25 & 0.3556 & 0.1110 & -0.1433 & --- & --- & --- & 0.3977 & 0.2345 & 0.0405 \\
+0.75 & 0.2899 & 0.1357 & 0.1505 & --- & --- & --- & 0.3275 & 0.1562 & 0.0989 \\
+1 & 0.2169 & 0.2333 & -0.0569 & --- & --- & --- & 0.2579 & 0.1020 & 0.5468 \\
+\addlinespace
+\multicolumn{10}{l}{\textit{Sin-Hom}} \\
+0 & 0.0962 & 0.0911 & 0.6089 & --- & --- & --- & 0.8026 & 0.2483 & 0.8718 \\
+0.25 & 0.0572 & 0.0807 & 0.6767 & --- & --- & --- & 0.7561 & 0.2292 & 0.4441 \\
+0.75 & 0.0565 & 0.0695 & 0.5949 & --- & --- & --- & 0.3656 & 0.1323 & -0.2424 \\
+1 & 0.0325 & 0.0187 & 0.8677 & --- & --- & --- & 0.0898 & 0.0644 & 0.1828 \\
+\addlinespace
+\multicolumn{10}{l}{\textit{Sin-Het}} \\
+0 & 0.1713 & 0.0952 & 0.5956 & --- & --- & --- & 0.4042 & 0.2647 & 0.3408 \\
+0.25 & 0.1209 & 0.1052 & 0.5412 & --- & --- & --- & 0.3912 & 0.2156 & 0.4180 \\
+0.75 & 0.1037 & 0.0656 & 0.4448 & --- & --- & --- & 0.3206 & 0.1848 & 0.3813 \\
+1 & 0.0877 & 0.0691 & 0.3882 & --- & --- & --- & 0.2545 & 0.0971 & 0.7974 \\
+\bottomrule
+\end{tabular}
+\end{table}

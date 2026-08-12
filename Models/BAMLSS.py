@@ -24,9 +24,12 @@ try:
     warnings.filterwarnings('ignore')
     
     RPY2_AVAILABLE = True
-except ImportError:
+except Exception:
+    # Broad on purpose: rpy2 raises ImportError when the package itself is
+    # missing, but ValueError (e.g. "r_home is None") when rpy2 is installed
+    # and R isn't found. Either way BAMLSS is just unavailable.
     RPY2_AVAILABLE = False
-    print("Warning: rpy2 not available. Install with: pip install rpy2")
+    print("Warning: rpy2/R not available. Install with: pip install rpy2")
     print("Also ensure R is installed and available in PATH.")
 
 

@@ -1,8 +1,11 @@
 """
-2x4 panel plots (2 rows AU/EU x 4 models) for all four OOD conditions.
-Generates both variance (mean +/- std bands) and entropy (line plots) figures.
-One variance + one entropy figure per condition: linear homo, linear hetero, sin homo, sin hetero.
-Loads npz from results/ood/outputs/ood/<noise_type>/<func_type>/.
+Panel plots (3 rows Total/AU/EU x N models with available data) for all four OOD
+conditions. Generates both variance (mean +/- std bands) and entropy (line plots,
+still 2 rows AU/EU) figures. One variance + one entropy figure per condition: linear
+homo, linear hetero, sin homo, sin hetero. Loads npz from
+results/ood/outputs/ood/<noise_type>/<func_type>/. Models missing an npz file are
+simply omitted (grid gets fewer columns, not a "No data" placeholder). Variance
+panels' y-axis is fixed per func_type: (-7.5, 15) for linear, (-20, 31) for sin.
 """
 import sys
 from pathlib import Path
@@ -69,6 +72,7 @@ def load_model_data(npz_path):
     mu_pred = np.mean(mu_samples, axis=0).squeeze()
     ale_var = np.mean(sigma2_samples, axis=0).squeeze()
     epi_var = np.var(mu_samples, axis=0).squeeze()
+    tot_var = ale_var + epi_var
 
     ent = entropy_uncertainty_analytical(mu_samples, sigma2_samples)
     ale_entropy = np.asarray(ent["aleatoric"]).squeeze()
@@ -97,6 +101,7 @@ def load_model_data(npz_path):
         "mu_pred": mu_pred,
         "ale_var": ale_var,
         "epi_var": epi_var,
+        "tot_var": tot_var,
         "ale_entropy": ale_entropy,
         "epi_entropy": epi_entropy,
         "ood_mask": ood_mask,
@@ -132,40 +137,40 @@ def _add_common_variance(ax, data):
 
 
 def create_2x4_variance_panel(condition_data_list, display_names, func_type, noise_type, save_path):
-    """2 rows (AU, EU) x 4 cols (models). Variance = mean +/- sqrt(var) bands."""
-    fig, axes = plt.subplots(2, 4, figsize=(20, 10), sharex=True)
+    """3 rows (Total, AU, EU) x N cols (models with available data). Variance = mean
+    +/- sqrt(var) bands. Y-axis fixed per func_type: (-7.5,15) linear, (-20,31) sin."""
+    n_cols = len(condition_data_list)
+    fig, axes = plt.subplots(3, n_cols, figsize=(5 * n_cols, 15), sharex=True, squeeze=False)
     func_title = "Linear" if func_type == "linear" else "Sinusoidal"
     noise_title = "homoscedastic" if noise_type == "homoscedastic" else "heteroscedastic"
+    ylim = (-7.5, 15) if func_type == "linear" else (-20, 31)
 
-    for row, (band_name, band_key_ale, band_key_epi, color, label) in enumerate([
-        ("Aleatoric (AU)", "ale_var", None, "#06A77D", "±σ(aleatoric)"),
-        ("Epistemic (EU)", None, "epi_var", "#F18F01", "±σ(epistemic)"),
+    for row, (band_name, band_key, color, label) in enumerate([
+        ("Total (TU)", "tot_var", "#2E86AB", "±σ(total)"),
+        ("Aleatoric (AU)", "ale_var", "#06A77D", "±σ(aleatoric)"),
+        ("Epistemic (EU)", "epi_var", "#F18F01", "±σ(epistemic)"),
     ]):
-        for col in range(4):
+        for col in range(n_cols):
             ax = axes[row, col]
-            if col >= len(condition_data_list) or condition_data_list[col] is None:
-                ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes, fontsize=12)
-                ax.set_ylabel("y", fontsize=10)
-                if row == 0:
-                    ax.set_title(display_names[col], fontweight="bold", fontsize=11, pad=6)
-                continue
             data = condition_data_list[col]
             x = data["x"]
             mu_pred = data["mu_pred"]
-            var = data[band_key_ale] if band_key_ale else data[band_key_epi]
+            var = data[band_key]
             ax.plot(x, mu_pred, "b-", linewidth=2, label="Predictive mean", zorder=5)
             ax.fill_between(x, mu_pred - np.sqrt(var), mu_pred + np.sqrt(var),
                             alpha=0.35, color=color, label=label, zorder=1)
             _add_common_variance(ax, data)
             ax.set_ylabel("y", fontsize=10)
+            ax.set_ylim(*ylim)
             if row == 0:
                 ax.set_title(display_names[col], fontweight="bold", fontsize=11, pad=6)
             ax.legend(loc="upper left", fontsize=8, framealpha=0.9)
 
-    for col in range(4):
-        axes[1, col].set_xlabel("x", fontsize=11, fontweight="bold")
-    axes[0, 0].set_ylabel("y\n(Aleatoric)", fontsize=10, fontweight="bold")
-    axes[1, 0].set_ylabel("y\n(Epistemic)", fontsize=10, fontweight="bold")
+    for col in range(n_cols):
+        axes[2, col].set_xlabel("x", fontsize=11, fontweight="bold")
+    axes[0, 0].set_ylabel("y\n(Total)", fontsize=10, fontweight="bold")
+    axes[1, 0].set_ylabel("y\n(Aleatoric)", fontsize=10, fontweight="bold")
+    axes[2, 0].set_ylabel("y\n(Epistemic)", fontsize=10, fontweight="bold")
     fig.suptitle(f"OOD — {func_title}, {noise_title} — Variance (std bands)", fontsize=14, fontweight="bold", y=0.995)
     plt.tight_layout(rect=[0, 0, 1, 0.98])
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,22 +198,21 @@ def _add_common_entropy(ax, ax_twin, data, entropy_color):
 
 
 def create_2x4_entropy_panel(condition_data_list, display_names, func_type, noise_type, save_path):
-    """2 rows (AU, EU) x 4 cols (models). Entropy line plots (twin axis)."""
-    fig, axes = plt.subplots(2, 4, figsize=(20, 10), sharex=True)
+    """2 rows (AU, EU) x N cols (models with available data). Entropy line plots
+    (twin axis). Primary (y) axis fixed per func_type, same as the variance panel;
+    the entropy (nats) twin axis is left autoscaled."""
+    n_cols = len(condition_data_list)
+    fig, axes = plt.subplots(2, n_cols, figsize=(5 * n_cols, 10), sharex=True, squeeze=False)
     func_title = "Linear" if func_type == "linear" else "Sinusoidal"
     noise_title = "homoscedastic" if noise_type == "homoscedastic" else "heteroscedastic"
+    ylim = (-7.5, 15) if func_type == "linear" else (-20, 31)
 
     for row, (ent_key, color, label) in enumerate([
         ("ale_entropy", "green", "Aleatoric entropy (nats)"),
         ("epi_entropy", "#C41E3A", "Epistemic entropy (nats)"),
     ]):
-        for col in range(4):
+        for col in range(n_cols):
             ax = axes[row, col]
-            if col >= len(condition_data_list) or condition_data_list[col] is None:
-                ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes, fontsize=12)
-                if row == 0:
-                    ax.set_title(display_names[col], fontweight="bold", fontsize=11, pad=6)
-                continue
             data = condition_data_list[col]
             ax_twin = ax.twinx()
             x = data["x"]
@@ -218,13 +222,14 @@ def create_2x4_entropy_panel(condition_data_list, display_names, func_type, nois
             ax_twin.plot(x[ood_mask], ent[ood_mask], "-", color=color, linewidth=2, alpha=0.7)
             _add_common_entropy(ax, ax_twin, data, color)
             ax.set_ylabel("y", fontsize=10)
+            ax.set_ylim(*ylim)
             ax_twin.set_ylabel("Entropy (nats)", fontsize=9, color=color)
             if row == 0:
                 ax.set_title(display_names[col], fontweight="bold", fontsize=11, pad=6)
             ax.legend(loc="upper left", fontsize=8)
             ax_twin.legend(loc="upper right", fontsize=8)
 
-    for col in range(4):
+    for col in range(n_cols):
         axes[1, col].set_xlabel("x", fontsize=11, fontweight="bold")
     axes[0, 0].set_ylabel("y\n(Aleatoric)", fontsize=10, fontweight="bold")
     axes[1, 0].set_ylabel("y\n(Epistemic)", fontsize=10, fontweight="bold")
@@ -239,7 +244,6 @@ def create_2x4_entropy_panel(condition_data_list, display_names, func_type, nois
 def main():
     outputs_base = project_root / "results" / "ood" / "outputs" / "ood"
     save_dir = project_root / "results" / "ood" / "plots"
-    display_names = [m[1] for m in MODELS]
 
     for func_type, noise_type in CONDITIONS:
         search_dir = outputs_base / noise_type / func_type
@@ -247,24 +251,24 @@ def main():
             print("Skipping (dir missing):", search_dir)
             continue
 
-        condition_data_list = []
+        available = []  # list of (display_name, data)
         for pattern, display_name in MODELS:
             npz_files = sorted(search_dir.glob(f"{pattern}raw_outputs*.npz"))
             if not npz_files:
-                print("  No npz for", display_name, "under", search_dir, "- leaving column empty.")
-                condition_data_list.append(None)
+                print("  No npz for", display_name, "under", search_dir, "- omitting column.")
                 continue
             npz_path = npz_files[-1]
             try:
-                data = load_model_data(npz_path)
-                condition_data_list.append(data)
+                available.append((display_name, load_model_data(npz_path)))
             except Exception as e:
                 print("  Error loading", npz_path, ":", e)
-                condition_data_list.append(None)
 
-        if all(d is None for d in condition_data_list):
+        if not available:
             print("  No data for condition", func_type, noise_type, "- skipping.")
             continue
+
+        display_names = [d[0] for d in available]
+        condition_data_list = [d[1] for d in available]
 
         save_path_var = save_dir / f"panel_ood_2x4_{func_type}_{noise_type}_variance.png"
         save_path_ent = save_dir / f"panel_ood_2x4_{func_type}_{noise_type}_entropy.png"

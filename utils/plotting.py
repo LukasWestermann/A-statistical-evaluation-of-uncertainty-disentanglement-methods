@@ -237,9 +237,24 @@ def plot_uncertainties_no_ood(x_train_subset, y_train_subset, x_grid, y_clean, m
     plt.close(fig)
 
 
-def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, ood_mask, title, noise_type='heteroscedastic', func_type='', save_individual=True):
+def _reasonable_ood_ylim(y_train, y_clean_flat, margin_factor=1.5):
+    """A y-axis range sized from the actual data (training scatter + clean function,
+    which already spans the OOD region), not the uncertainty bands. Models like BAMLSS
+    can produce wildly exploded variance when extrapolating into the OOD region; without
+    an explicit ylim, matplotlib autoscales to include that, squashing the rest of the
+    plot into an unreadable sliver. Padding is a multiple of the observed data range
+    rather than a fixed constant, so it adapts to whichever DGP/noise setting is plotted.
+    """
+    y_train_flat = y_train[:, 0] if np.asarray(y_train).ndim > 1 else y_train
+    y_all = np.concatenate([np.asarray(y_train_flat).ravel(), np.asarray(y_clean_flat).ravel()])
+    data_lo, data_hi = np.min(y_all), np.max(y_all)
+    margin = margin_factor * (data_hi - data_lo)
+    return data_lo - margin, data_hi + margin
+
+
+def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, epi_var, tot_var, ood_mask, title, noise_type='heteroscedastic', func_type='', save_individual=True, ylim_margin=1.5):
     """Plot uncertainties with OOD regions highlighted
-    
+
     Args:
         x_train: Training data x values
         y_train: Training data y values
@@ -253,6 +268,10 @@ def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, 
         title: Plot title
         noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
         func_type: Function type identifier (e.g., 'linear', 'sin')
+        ylim_margin: Y-axis padding as a multiple of the training+clean-function data
+            range, applied to all 3 panels. Keeps exploded uncertainty (e.g. BAMLSS
+            extrapolating into the OOD region) from stretching the axis and squashing
+            everything else -- the band is simply cut off past this range instead.
     """
     fig, axes = plt.subplots(3, 1, figsize=(12, 16), sharex=True)
     x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
@@ -273,7 +292,12 @@ def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, 
     
     # Prepare clean function values
     y_clean_flat = y_clean[:, 0] if y_clean.ndim > 1 else y_clean
-    
+
+    # Reasonable y-axis range from the actual data, applied to all 3 panels below so
+    # exploded uncertainty bands (e.g. BAMLSS in the OOD region) get cut off instead of
+    # stretching the axis and squashing everything else.
+    ylim = _reasonable_ood_ylim(y_train, y_clean_flat, margin_factor=ylim_margin)
+
     # Find ID/OOD boundaries for vertical separator lines
     boundary_x = []
     if np.any(ood_mask_bool):
@@ -281,16 +305,16 @@ def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, 
         transitions = np.where(np.diff(ood_mask_bool.astype(int)) != 0)[0]
         if len(transitions) > 0:
             boundary_x = x[transitions + 1]  # x values at boundaries
-    
+
     # Plot 1: Predictive mean + Total uncertainty
-    axes[0].scatter(x_train[:, 0] if x_train.ndim > 1 else x_train, 
-                   y_train[:, 0] if y_train.ndim > 1 else y_train, 
+    axes[0].scatter(x_train[:, 0] if x_train.ndim > 1 else x_train,
+                   y_train[:, 0] if y_train.ndim > 1 else y_train,
                    alpha=0.1, s=10, color='blue', label="Training data", zorder=3)
-    
+
     # Add vertical separator lines
     for bx in boundary_x:
         axes[0].axvline(x=bx, color='gray', linestyle='--', linewidth=1.5, alpha=0.7, zorder=5)
-    
+
     axes[0].plot(x[id_mask], mu_pred[id_mask], 'b-', linewidth=1.2, label="Predictive mean")
     axes[0].plot(x[ood_mask_bool], mu_pred[ood_mask_bool], 'b-', linewidth=1.2)
     axes[0].fill_between(x[id_mask], mu_pred[id_mask] - np.sqrt(tot_var[id_mask]), 
@@ -305,14 +329,15 @@ def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, 
     if np.any(ood_mask_bool):
         axes[0].plot(x[ood_mask_bool], y_clean_flat[ood_mask_bool], 'r-', linewidth=1.5, alpha=0.8)
         # Mark OOD grid points (no label)
-        axes[0].scatter(x[ood_mask_bool], y_clean_flat[ood_mask_bool], s=8, color='red', 
+        axes[0].scatter(x[ood_mask_bool], y_clean_flat[ood_mask_bool], s=8, color='red',
                        alpha=0.3, marker='x', zorder=4)
-    
+
     axes[0].set_ylabel("y")
     axes[0].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Total Uncertainty")
     axes[0].legend(loc="upper left")
     axes[0].grid(True, alpha=0.3)
-    
+    axes[0].set_ylim(*ylim)
+
     # Plot 2: Predictive mean + Aleatoric uncertainty only
     axes[1].scatter(x_train[:, 0] if x_train.ndim > 1 else x_train, 
                    y_train[:, 0] if y_train.ndim > 1 else y_train, 
@@ -336,13 +361,14 @@ def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, 
     if np.any(ood_mask_bool):
         axes[1].plot(x[ood_mask_bool], y_clean_flat[ood_mask_bool], 'r-', linewidth=1.5, alpha=0.8)
         # Mark OOD grid points (no label)
-        axes[1].scatter(x[ood_mask_bool], y_clean_flat[ood_mask_bool], s=15, color='red', 
+        axes[1].scatter(x[ood_mask_bool], y_clean_flat[ood_mask_bool], s=15, color='red',
                        alpha=0.4, marker='x', zorder=4)
-    
+
     axes[1].set_ylabel("y")
     axes[1].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Aleatoric Uncertainty")
     axes[1].legend(loc="upper left")
     axes[1].grid(True, alpha=0.3)
+    axes[1].set_ylim(*ylim)
 
     # Plot 3: Predictive mean + Epistemic uncertainty only
     axes[2].scatter(x_train[:, 0] if x_train.ndim > 1 else x_train, 
@@ -375,9 +401,10 @@ def plot_uncertainties_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_var, 
     axes[2].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Epistemic Uncertainty")
     axes[2].legend(loc="upper left")
     axes[2].grid(True, alpha=0.3)
+    axes[2].set_ylim(*ylim)
 
     plt.tight_layout()
-    
+
     if save_individual:
         # Save plot with organized folder structure: uncertainties_ood/{noise_type}/{func_type}/
         subfolder = f"uncertainties_ood/{noise_type}/{func_type}" if func_type else f"uncertainties_ood/{noise_type}"
@@ -872,9 +899,9 @@ def plot_uncertainties_entropy_no_ood(x_train_subset, y_train_subset, x_grid, y_
     plt.close(fig)
 
 
-def plot_uncertainties_entropy_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask, title, noise_type='heteroscedastic', func_type='', save_individual=True):
+def plot_uncertainties_entropy_ood(x_train, y_train, x_grid, y_clean, mu_pred, ale_entropy, epi_entropy, tot_entropy, ood_mask, title, noise_type='heteroscedastic', func_type='', save_individual=True, ylim_margin=1.5):
     """Plot entropy-based uncertainties with OOD regions highlighted
-    
+
     Args:
         x_train: Training data x values
         y_train: Training data y values
@@ -888,6 +915,8 @@ def plot_uncertainties_entropy_ood(x_train, y_train, x_grid, y_clean, mu_pred, a
         title: Plot title
         noise_type: Type of noise ('heteroscedastic' or 'homoscedastic')
         func_type: Function type identifier (e.g., 'linear', 'sin')
+        ylim_margin: Y-axis padding as a multiple of the training+clean-function data
+            range, applied to all 3 panels -- see _reasonable_ood_ylim.
     """
     fig, axes = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
     x = x_grid[:, 0] if x_grid.ndim > 1 else x_grid
@@ -908,14 +937,19 @@ def plot_uncertainties_entropy_ood(x_train, y_train, x_grid, y_clean, mu_pred, a
     
     # Prepare clean function values
     y_clean_flat = y_clean[:, 0] if y_clean.ndim > 1 else y_clean
-    
+
     # Convert entropy to equivalent standard deviation for visualization
     # For Gaussian: H = 0.5 * log(2πe * σ²), so σ = exp(H) / sqrt(2πe)
     sqrt_2pi_e = np.sqrt(2 * np.pi * np.e)
     tot_std_equiv = np.exp(tot_entropy) / sqrt_2pi_e
     ale_std_equiv = np.exp(ale_entropy) / sqrt_2pi_e
     epi_std_equiv = np.exp(epi_entropy) / sqrt_2pi_e
-    
+
+    # Reasonable y-axis range from the actual data, applied to all 3 panels below so
+    # exploded uncertainty (e.g. BAMLSS in the OOD region) gets cut off instead of
+    # stretching the axis and squashing everything else.
+    ylim = _reasonable_ood_ylim(y_train, y_clean_flat, margin_factor=ylim_margin)
+
     # Find ID/OOD boundaries for vertical separator lines
     boundary_x = []
     if np.any(ood_mask_bool):
@@ -954,6 +988,7 @@ def plot_uncertainties_entropy_ood(x_train, y_train, x_grid, y_clean, mu_pred, a
     axes[0].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Total Entropy (as ±σ)")
     axes[0].legend(loc="upper left")
     axes[0].grid(True, alpha=0.3)
+    axes[0].set_ylim(*ylim)
     
     # Plot 1: Predictive mean + Aleatoric entropy (as bands)
     axes[1].scatter(x_train[:, 0] if x_train.ndim > 1 else x_train, 
@@ -985,6 +1020,7 @@ def plot_uncertainties_entropy_ood(x_train, y_train, x_grid, y_clean, mu_pred, a
     axes[1].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Aleatoric Entropy (as ±σ)")
     axes[1].legend(loc="upper left")
     axes[1].grid(True, alpha=0.3)
+    axes[1].set_ylim(*ylim)
     
     # Plot 2: Predictive mean + Epistemic entropy (as bands)
     axes[2].scatter(x_train[:, 0] if x_train.ndim > 1 else x_train, 
@@ -1017,6 +1053,7 @@ def plot_uncertainties_entropy_ood(x_train, y_train, x_grid, y_clean, mu_pred, a
     axes[2].set_title(f"{title} ({noise_type.capitalize()}): Predictive Mean + Epistemic Entropy (as ±σ)")
     axes[2].legend(loc="upper left")
     axes[2].grid(True, alpha=0.3)
+    axes[2].set_ylim(*ylim)
     
     plt.tight_layout()
     
