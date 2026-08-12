@@ -1,0 +1,32 @@
+\begin{table}
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{AU and EU, min--max normalised per model over the pooled grid, split into the interior under-sampled band ($x\in(0,6)$, density factor 0.01 relative to $x\in[-5,0]\cup[6,10]$ at density 1) versus the well-sampled remainder. AU is on average 0.1803 lower and EU is on average 0.2889 lower in well-sampled than under-sampled.}
+\label{tab:undersampling}
+\begin{tabular}{lrrrrrr}
+\toprule
+Scenario/Model & AU$_{\text{under}}$ & AU$_{\text{well}}$ & EU$_{\text{under}}$ & EU$_{\text{well}}$ & $\rho_{\text{under}}$ & $\rho_{\text{well}}$ \\
+\midrule
+\multicolumn{7}{l}{\textit{Lin-Hom}} \\
+Deep Ensemble & 0.3081 & 0.5742 & 0.3945 & 0.0259 & -0.8725 & -0.2143 \\
+MC Dropout & 0.2342 & 0.4270 & 0.1289 & 0.2856 & 0.9150 & 0.9498 \\
+BAMLSS & 0.7328 & 0.3263 & 0.6741 & 0.0523 & 0.5242 & 0.4628 \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Lin-Het}} \\
+Deep Ensemble & 0.8784 & 0.3446 & 0.7035 & 0.1055 & -0.9416 & 0.1637 \\
+MC Dropout & 0.8018 & 0.2825 & 0.1442 & 0.2925 & -0.8289 & -0.4681 \\
+BAMLSS & 0.1875 & 0.0545 & 0.5222 & 0.1928 & 0.8495 & 0.9123 \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Sin-Hom}} \\
+Deep Ensemble & 0.7085 & 0.4157 & 0.5630 & 0.1566 & 0.2440 & -0.2650 \\
+MC Dropout & 0.1514 & 0.4081 & 0.3766 & 0.1409 & 0.3655 & 0.6637 \\
+BAMLSS & 0.7553 & 0.3565 & 0.5169 & 0.0046 & 0.4987 & 0.3444 \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Sin-Het}} \\
+Deep Ensemble & 0.9522 & 0.2552 & 0.6366 & 0.0573 & 0.7235 & 0.0132 \\
+MC Dropout & 0.3966 & 0.4557 & 0.3218 & 0.1195 & 0.1909 & 0.5740 \\
+BAMLSS & 0.1256 & 0.1684 & 0.0051 & 0.0869 & -0.0867 & -0.2378 \\
+\bottomrule
+\end{tabular}
+\end{table}

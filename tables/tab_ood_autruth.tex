@@ -1,0 +1,25 @@
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Scenario/Model & Bias$_{\text{ID}}$ & Bias$_{\text{OOD}}$ & Slope$_{\text{ID}}$ & Slope$_{\text{OOD}}$ & Pearson$_{\text{ID}}$ & Pearson$_{\text{OOD}}$ & Spearman$_{\text{ID}}$ & Spearman$_{\text{OOD}}$ \\
+\midrule
+\multicolumn{9}{l}{\textit{Lin-Hom}} \\
+Deep Ensemble & $-4.93\times10^{-2}$ & $-1.77\times10^{-1}$ & --- & --- & --- & --- & --- & --- \\
+MC Dropout & $3.02\times10^{-1}$ & $9.49\times10^{-1}$ & --- & --- & --- & --- & --- & --- \\
+BAMLSS & $-3.45\times10^{-2}$ & $-1.48\times10^{-1}$ & --- & --- & --- & --- & --- & --- \\
+\addlinespace
+\multicolumn{9}{l}{\textit{Lin-Het}} \\
+Deep Ensemble & $4.45\times10^{-2}$ & $-2.92\times10^{0}$ & $1.09\times10^{0}$ & $-1.43\times10^{-1}$ & 0.958 & -0.719 & 0.949 & -0.499 \\
+MC Dropout & $3.63\times10^{-1}$ & $-2.45\times10^{0}$ & $6.45\times10^{-1}$ & $5.73\times10^{-2}$ & 0.929 & 0.409 & 0.862 & 0.431 \\
+BAMLSS & $1.91\times10^{-1}$ & $1.29\times10^{19}$ & $1.10\times10^{0}$ & $-1.19\times10^{19}$ & 0.947 & -0.369 & 0.949 & -0.499 \\
+\addlinespace
+\multicolumn{9}{l}{\textit{Sin-Hom}} \\
+Deep Ensemble & $-1.14\times10^{-2}$ & $-2.16\times10^{-1}$ & --- & --- & --- & --- & --- & --- \\
+MC Dropout & $6.36\times10^{0}$ & $5.42\times10^{1}$ & --- & --- & --- & --- & --- & --- \\
+BAMLSS & $-2.90\times10^{-2}$ & $-1.51\times10^{-1}$ & --- & --- & --- & --- & --- & --- \\
+\addlinespace
+\multicolumn{9}{l}{\textit{Sin-Het}} \\
+Deep Ensemble & $3.58\times10^{-1}$ & $1.22\times10^{1}$ & $1.11\times10^{0}$ & $-3.30\times10^{0}$ & 0.968 & -0.662 & 0.951 & -0.499 \\
+MC Dropout & $6.47\times10^{0}$ & $4.45\times10^{1}$ & $-5.02\times10^{-1}$ & $-2.93\times10^{0}$ & -0.135 & -0.578 & 0.307 & -0.492 \\
+BAMLSS & $2.14\times10^{-1}$ & $1.62\times10^{21}$ & $1.11\times10^{0}$ & $-1.50\times10^{21}$ & 0.946 & -0.353 & 0.949 & -0.499 \\
+\bottomrule
+\end{tabular}

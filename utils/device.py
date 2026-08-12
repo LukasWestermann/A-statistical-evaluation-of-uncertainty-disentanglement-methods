@@ -3,9 +3,12 @@ import torch
 def get_device():
     """Automatically select the best available device (fastest GPU or CPU)."""
     if not torch.cuda.is_available():
+        if torch.backends.mps.is_available():
+            print("Using Apple Silicon GPU (MPS).")
+            return torch.device("mps")
         print("CUDA not available. Using CPU.")
         return torch.device("cpu")
-   
+
     num_gpus = torch.cuda.device_count()
     if num_gpus == 1:
         device = torch.device("cuda:0")
@@ -36,8 +39,10 @@ def get_device_for_worker(worker_id):
         torch.device: Device assigned to this worker
     """
     if not torch.cuda.is_available():
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
         return torch.device("cpu")
-    
+
     num_gpus = torch.cuda.device_count()
     gpu_id = worker_id % num_gpus
     return torch.device(f"cuda:{gpu_id}")
@@ -46,4 +51,6 @@ def get_num_gpus():
     """Get number of available GPUs."""
     if torch.cuda.is_available():
         return torch.cuda.device_count()
+    if torch.backends.mps.is_available():
+        return 1
     return 0

@@ -1,11 +1,9 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import matplotlib.pyplot as plt
-from torch.utils.data import TensorDataset, DataLoader
-from concurrent.futures import ThreadPoolExecutor
-import multiprocessing as mp
 
 from utils.device import get_device
 
@@ -43,40 +41,78 @@ class BaselineRegressor(nn.Module):
         var = sigma ** 2
         return mu, var
 
-# ----- Training loop for a single model -----
-def train_single_ensemble(model, loader, epochs=500, lr=1e-3, loss_type='nll', beta=0.5, seed=None):
-    if seed is not None:
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-    model.to(device)
-    opt = optim.Adam(model.parameters(), lr=lr)
+# ----- Vectorized ensemble module (training only) -----
+class _BatchedEnsemble(nn.Module):
+    """K BaselineRegressor members stacked along a leading dim and trained with one
+    batched matmul per layer instead of a Python loop or threads over K models.
+    There is no mixing between members (each uses only its own weight slice), so a
+    single Adam optimizer over the stacked parameters is equivalent to K independent
+    optimizers: Adam's moment estimates and updates are elementwise per parameter."""
 
-    for epoch in range(epochs):
-        model.train()
-        total_loss = 0.0
-        for xb, yb in loader:
-            xb = xb.to(device)
-            yb = yb.to(device)
-            mu, var = model(xb)
-            if loss_type == 'nll':
-                loss = gaussian_nll(yb, mu, var).mean()
-            elif loss_type == 'beta_nll':
-                loss = beta_nll(yb, mu, var, beta=beta).mean()
-            else:
-                raise ValueError("loss_type must be 'nll' or 'beta_nll'")
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            total_loss += loss.item() * xb.size(0)
-        # Optional: print every 100 epochs
-        if (epoch + 1) % 100 == 0:
-            print(f"[{loss_type}] Epoch {epoch+1}/{epochs} - avg loss {total_loss/len(loader.dataset):.4f}")
+    def __init__(self, K, input_dim=1, hidden=32):
+        super().__init__()
+        self.K = K
+        self.input_dim = input_dim
+        self.w1 = nn.Parameter(torch.empty(K, hidden, input_dim))
+        self.b1 = nn.Parameter(torch.empty(K, hidden))
+        self.w2 = nn.Parameter(torch.empty(K, hidden, hidden))
+        self.b2 = nn.Parameter(torch.empty(K, hidden))
+        self.w_mu = nn.Parameter(torch.empty(K, 1, hidden))
+        self.b_mu = nn.Parameter(torch.empty(K, 1))
+        self.w_sigma = nn.Parameter(torch.empty(K, 1, hidden))
+        self.b_sigma = nn.Parameter(torch.empty(K, 1))
+        self.eps = 1e-6
+        self._init_members(input_dim, hidden)
+
+    def _init_members(self, input_dim, hidden):
+        # Build each member's layers with nn.Linear's own default init, seeded the
+        # same way each ensemble member has always been seeded, so per-member
+        # initialization diversity matches training K separate models.
+        with torch.no_grad():
+            for k in range(self.K):
+                torch.manual_seed(base_seed + 1000 + k)
+                l1, l2 = nn.Linear(input_dim, hidden), nn.Linear(hidden, hidden)
+                lmu, lsig = nn.Linear(hidden, 1), nn.Linear(hidden, 1)
+                self.w1[k].copy_(l1.weight); self.b1[k].copy_(l1.bias)
+                self.w2[k].copy_(l2.weight); self.b2[k].copy_(l2.bias)
+                self.w_mu[k].copy_(lmu.weight); self.b_mu[k].copy_(lmu.bias)
+                self.w_sigma[k].copy_(lsig.weight); self.b_sigma[k].copy_(lsig.bias)
+
+    def forward(self, x):
+        # x: [K, B, input_dim]
+        h = torch.relu(torch.bmm(x, self.w1.transpose(1, 2)) + self.b1.unsqueeze(1))
+        h = torch.relu(torch.bmm(h, self.w2.transpose(1, 2)) + self.b2.unsqueeze(1))
+        mu = torch.bmm(h, self.w_mu.transpose(1, 2)) + self.b_mu.unsqueeze(1)
+        sigma = F.softplus(torch.bmm(h, self.w_sigma.transpose(1, 2)) + self.b_sigma.unsqueeze(1)) + self.eps
+        return mu, sigma ** 2
+
+    def unpack(self):
+        """Split the trained batched weights into K standalone BaselineRegressor
+        models, so callers (ensemble_predict_deep, tests) see the same list-of-models
+        interface as before."""
+        models = []
+        with torch.no_grad():
+            for k in range(self.K):
+                m = BaselineRegressor(input_dim=self.input_dim)
+                m.trunk[0].weight.copy_(self.w1[k]); m.trunk[0].bias.copy_(self.b1[k])
+                m.trunk[2].weight.copy_(self.w2[k]); m.trunk[2].bias.copy_(self.b2[k])
+                m.mu_head.weight.copy_(self.w_mu[k]); m.mu_head.bias.copy_(self.b_mu[k])
+                m.sigma_head[0].weight.copy_(self.w_sigma[k]); m.sigma_head[0].bias.copy_(self.b_sigma[k])
+                models.append(m.to(device))
+        return models
 
 # ----- Train an ensemble of K models -----
 def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', beta=0.5, parallel=True, epochs=500, input_dim=1):
     """
     Train an ensemble of K models.
-    
+
+    Members are trained as one batched module (stacked weights, single Adam
+    optimizer) instead of K sequential or multi-threaded model instances. This
+    gives real GPU-parallel training across members on any backend, including
+    Apple's MPS, where concurrent multi-threaded kernel submission crashes the
+    process. `parallel` is kept for backward compatibility but no longer changes
+    behavior.
+
     Args:
         x_train: Training inputs
         y_train: Training targets
@@ -84,34 +120,49 @@ def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', 
         K: Number of ensemble members
         loss_type: 'nll' or 'beta_nll'
         beta: Beta parameter for beta-NLL loss
-        parallel: If True, train ensemble members in parallel using ThreadPoolExecutor
         input_dim: Input dimension (1 for univariate, 2 for OVB with X and Z)
-    
+
     Returns:
         List of trained models
     """
-    ds = TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train))
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=True)
+    if loss_type not in ('nll', 'beta_nll'):
+        raise ValueError("loss_type must be 'nll' or 'beta_nll'")
 
-    def train_member(k):
-        """Train a single ensemble member."""
-        model = BaselineRegressor(input_dim=input_dim)
-        # Different seed per member to vary initialization and shuffling
-        member_seed = base_seed + 1000 + k
-        train_single_ensemble(model, loader, epochs=epochs, lr=1e-3, loss_type=loss_type, beta=beta, seed=member_seed)
-        return model
-    
-    if parallel and K > 1:
-        # Use ThreadPoolExecutor for parallel training
-        # Note: Threads share the same GPU, which is fine for ensemble members
-        max_workers = min(K, mp.cpu_count())
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            ensemble = list(executor.map(train_member, range(K)))
-    else:
-        # Sequential training
-        ensemble = [train_member(k) for k in range(K)]
-    
-    return ensemble
+    N = x_train.shape[0]
+    x_t = torch.from_numpy(x_train).to(device)
+    y_t = torch.from_numpy(y_train).to(device)
+
+    ensemble = _BatchedEnsemble(K, input_dim=input_dim).to(device)
+    opt = optim.Adam(ensemble.parameters(), lr=1e-3)
+
+    # Each member gets its own permutation stream, seeded the same way its
+    # `torch.manual_seed(member_seed)` call used to be, so per-member batch order
+    # stays independent across epochs instead of every member sharing one shuffle.
+    perm_generators = [torch.Generator().manual_seed(base_seed + 1000 + k) for k in range(K)]
+
+    for epoch in range(epochs):
+        batch_indices = torch.stack([torch.randperm(N, generator=g) for g in perm_generators])  # [K, N]
+        total_loss, n_batches = 0.0, 0
+        for start in range(0, N, batch_size):
+            idx = batch_indices[:, start:start + batch_size].to(device)  # [K, b]
+            xb, yb = x_t[idx], y_t[idx]  # [K, b, input_dim], [K, b, 1]
+            mu, var = ensemble(xb)
+            if loss_type == 'beta_nll':
+                loss_per_elem = beta_nll(yb, mu, var, beta=beta)
+            else:
+                loss_per_elem = gaussian_nll(yb, mu, var)
+            # Mean over each member's own batch, summed across members so the
+            # per-member gradient magnitude matches training K independent models.
+            loss = loss_per_elem.mean(dim=(1, 2)).sum()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            total_loss += loss.item() / K
+            n_batches += 1
+        if (epoch + 1) % 100 == 0:
+            print(f"[{loss_type}] Epoch {epoch+1}/{epochs} - avg member loss {total_loss/n_batches:.4f}")
+
+    return ensemble.unpack()
 
 # ----- Ensemble prediction and uncertainty decomposition -----
 def ensemble_predict_deep(ensemble, x, return_raw_arrays=False):

@@ -1,0 +1,32 @@
+\begin{table}
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{Aleatoric (AU) and epistemic (EU) uncertainty, min--max normalised per model over the pooled in-distribution (ID, $x\in[-5,10]$) and out-of-distribution (OOD, $x\in(10,15]$) grid, with the Pearson correlation $\rho$(AU,EU) computed on the raw (unnormalised) values within each region. AU is on average 0.0334 lower and EU is on average 0.3997 higher in OOD than ID.}
+\label{tab:ood}
+\begin{tabular}{lrrrrrr}
+\toprule
+Scenario/Model & AU$_{\text{ID}}$ & AU$_{\text{OOD}}$ & EU$_{\text{ID}}$ & EU$_{\text{OOD}}$ & $\rho_{\text{ID}}$ & $\rho_{\text{OOD}}$ \\
+\midrule
+\multicolumn{7}{l}{\textit{Lin-Hom}} \\
+Deep Ensemble & 0.4478 & 0.0494 & 0.0433 & 0.4657 & -0.2622 & -0.9391 \\
+MC Dropout & 0.1659 & 0.7300 & 0.1089 & 0.5890 & 0.8191 & 0.8251 \\
+BAMLSS & 0.6514 & 0.1265 & 0.0017 & 0.3844 & -0.4925 & 0.7556 \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Lin-Het}} \\
+Deep Ensemble & 0.3538 & 0.1037 & 0.0403 & 0.4128 & 0.4707 & 0.9999 \\
+MC Dropout & 0.4429 & 0.1068 & 0.0937 & 0.5604 & -0.2327 & -0.7686 \\
+BAMLSS & 0.0000 & 0.0212 & 0.0098 & 0.3824 & 0.9169 & 0.4048 \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Sin-Hom}} \\
+Deep Ensemble & 0.5525 & 0.0927 & 0.0003 & 0.3201 & -0.0837 & -0.4826 \\
+MC Dropout & 0.0749 & 0.6654 & 0.0679 & 0.4824 & 0.8338 & 0.9005 \\
+BAMLSS & 0.6522 & 0.0814 & 0.0001 & 0.3482 & -0.2266 & 0.6719 \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Sin-Het}} \\
+Deep Ensemble & 0.0812 & 0.4446 & 0.0016 & 0.4205 & -0.1084 & 0.9999 \\
+MC Dropout & 0.1124 & 0.6931 & 0.0897 & 0.5384 & 0.8138 & 0.8823 \\
+BAMLSS & 0.0000 & 0.0196 & 0.0007 & 0.3500 & 0.8994 & 0.3990 \\
+\bottomrule
+\end{tabular}
+\end{table}

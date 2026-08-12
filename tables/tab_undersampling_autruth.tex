@@ -1,0 +1,25 @@
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Scenario/Model & Bias$_{\text{under}}$ & Bias$_{\text{well}}$ & Slope$_{\text{under}}$ & Slope$_{\text{well}}$ & Pearson$_{\text{under}}$ & Pearson$_{\text{well}}$ & Spearman$_{\text{under}}$ & Spearman$_{\text{well}}$ \\
+\midrule
+\multicolumn{9}{l}{\textit{Lin-Hom}} \\
+Deep Ensemble & 2.6788 & 3.0292 & --- & --- & --- & --- & --- & --- \\
+MC Dropout & 3.2847 & 3.5131 & --- & --- & --- & --- & --- & --- \\
+BAMLSS & 3.2792 & 3.0603 & --- & --- & --- & --- & --- & --- \\
+\addlinespace
+\multicolumn{9}{l}{\textit{Lin-Het}} \\
+Deep Ensemble & 3.2347 & 0.0879 & 0.094 & 1.016 & 0.528 & 0.974 & 0.583 & 0.976 \\
+MC Dropout & 3.3678 & 0.3598 & -0.132 & 0.742 & -0.489 & 0.956 & -0.414 & 0.840 \\
+BAMLSS & 6.5034 & 0.2282 & 4.495 & 1.071 & 0.671 & 0.956 & 0.915 & 0.970 \\
+\addlinespace
+\multicolumn{9}{l}{\textit{Sin-Hom}} \\
+Deep Ensemble & 3.7969 & 3.1991 & --- & --- & --- & --- & --- & --- \\
+MC Dropout & 5.4649 & 9.1033 & --- & --- & --- & --- & --- & --- \\
+BAMLSS & 3.3008 & 3.0604 & --- & --- & --- & --- & --- & --- \\
+\addlinespace
+\multicolumn{9}{l}{\textit{Sin-Het}} \\
+Deep Ensemble & 6.3644 & 0.2085 & -0.038 & 1.113 & -0.149 & 0.959 & 0.253 & 0.985 \\
+MC Dropout & 4.9481 & 6.2023 & 0.261 & -0.347 & 0.562 & -0.146 & 0.430 & 0.033 \\
+BAMLSS & -0.8977 & 0.2469 & 1.347 & 1.078 & 0.650 & 0.945 & 0.950 & 0.968 \\
+\bottomrule
+\end{tabular}
