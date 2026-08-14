@@ -879,6 +879,7 @@ def run_mc_dropout_noise_level_experiment(
                             distribution=distribution,
                             dropout_p=p,
                             mc_samples=mc_samples,
+                            seed=seed,
                             date=date
                         )
                         
@@ -1065,6 +1066,7 @@ def run_mc_dropout_noise_level_experiment(
                         distribution=distribution,
                         dropout_p=p,
                         mc_samples=mc_samples,
+                        seed=seed,
                         date=date
                     )
                     
@@ -1348,6 +1350,7 @@ def run_deep_ensemble_noise_level_experiment(
                             tau=tau,
                             distribution=distribution,
                             n_nets=K,
+                            seed=seed,
                             date=date
                         )
                         
@@ -1522,6 +1525,7 @@ def run_deep_ensemble_noise_level_experiment(
                         tau=tau,
                         distribution=distribution,
                         n_nets=K,
+                        seed=seed,
                         date=date
                     )
                     
@@ -1802,6 +1806,7 @@ def run_bnn_noise_level_experiment(
                             subfolder='noise_level',
                             tau=tau,
                             distribution=distribution,
+                            seed=seed,
                             date=date
                         )
                         
@@ -1979,6 +1984,7 @@ def run_bnn_noise_level_experiment(
                         subfolder='noise_level',
                         tau=tau,
                         distribution=distribution,
+                        seed=seed,
                         date=date
                     )
                     
@@ -2246,6 +2252,7 @@ def run_bamlss_noise_level_experiment(
                             subfolder='noise_level',
                             tau=tau,
                             distribution=distribution,
+                            seed=seed,
                             date=date
                         )
                         
@@ -2413,6 +2420,7 @@ def run_bamlss_noise_level_experiment(
                         subfolder='noise_level',
                         tau=tau,
                         distribution=distribution,
+                        seed=seed,
                         date=date
                     )
                     

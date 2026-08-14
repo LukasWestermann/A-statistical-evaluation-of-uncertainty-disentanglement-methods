@@ -46,12 +46,21 @@ Metric definitions (must match the thesis):
           values -- min-max normalisation is monotone-affine and does not change
           Pearson r, so computing on the raw scale is equivalent and simpler.
 
-Seed dimension: NONE exists anywhere in the raw data (confirmed by direct
-inspection of every npz across all 5 experiments -- save_model_outputs has no seed
-parameter, and no npz has a seed key). Every table therefore reports plain values,
-never mean +/- sd. Where two dated files exist for the same (model, DGP, knob) cell
-(re-runs on different days, not independent seeds -- confirmed byte-identical where
-checked), the latest date is used.
+Seed dimension: as of the seed-replication pilot, OOD/Undersampling/Sample-size/
+Noise-level/OVB all support an optional seed-replicate dimension (save_model_outputs
+and save_ovb_model_outputs both take an optional `seed` param, folded into the
+filename as a `seed{N}` token and into npz metadata). Where multiple seed-replicate
+files exist for a cell, every resolver used here (resolve_all_npz, resolve_all_npz_at_pct,
+resolve_all_npz_at_tau, resolve_all_ovb_npz) returns one file per distinct seed and
+the raw AU/EU arrays are pooled across all of them (load_ale_epi_pooled_across_seeds)
+before any further aggregation -- this is a POOLED point estimate, not a mean+/-sd
+across seeds (for that, see compute_samplesize_seed_spread, which reports per-seed
+values independently). Where no seed-tagged data exists yet for a cell (every
+experiment's data as of this writing, pre-replication), every resolver degrades to
+exactly the old single-latest-file behavior -- confirmed via a full regression check
+(every table byte-identical before/after the seed-pooling change). Within a single
+seed (or the no-seed case), two dated files for the same (model, DGP, knob, seed)
+cell are still deduped by taking the latest date, exactly as before.
 
 Missing data -> "---", always. Never fabricated, interpolated, or silently dropped.
 
@@ -72,6 +81,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -84,10 +94,13 @@ sys.path.insert(0, str(project_root))
 from utils.knn_entropy_regression import (  # noqa: E402
     build_ood_mask,
     ensure_samples_first,
+    parse_seed_from_stem,
     resolve_latest_npz,
     resolve_latest_npz_at_pct,
     resolve_latest_npz_at_tau,
+    resolve_all_npz,
     resolve_all_npz_at_pct,
+    resolve_all_npz_at_tau,
 )
 
 # ============================== Scope (flip here, or override --models at the CLI) ==============================
@@ -222,19 +235,21 @@ def search_dir_standard(experiment: str, noise_type: str, func_type: str, extra:
 
 
 def compute_region_table(experiment: str, region_masker) -> Dict[Tuple[str, str], Dict[str, Dict[str, Optional[dict]]]]:
-    """Shared logic for OOD / Undersampling: one file per (model, DGP), pooled
-    scope = that single grid, split into two named regions by `region_masker(x)`
-    -> {region_name: bool_mask}. Returns {(func_type,noise_type): {model_tag: stats_by_region}}."""
+    """Shared logic for OOD / Undersampling: one or more seed-replicate files per
+    (model, DGP), pooled scope = every found seed's grid concatenated, split into
+    two named regions by `region_masker(x)` -> {region_name: bool_mask}. Returns
+    {(func_type,noise_type): {model_tag: stats_by_region}}. Degrades to exactly the
+    single-file behavior when no seed-tagged data exists yet (resolve_all_npz)."""
     out: Dict[Tuple[str, str], Dict[str, Dict[str, Optional[dict]]]] = {}
     for func_type, noise_type, _label in DGPS:
         search_dir = search_dir_standard(experiment, noise_type, func_type)
         per_model: Dict[str, Dict[str, Optional[dict]]] = {}
         for model_tag, _display in MODELS:
-            npz_path = resolve_latest_npz(search_dir, (f"*{model_tag}*raw_outputs*.npz",)) if search_dir.exists() else None
-            if npz_path is None:
+            npz_paths = resolve_all_npz(search_dir, model_tag) if search_dir.exists() else []
+            if not npz_paths:
                 per_model[model_tag] = {"A": None, "B": None}
                 continue
-            x, ale, epi = load_ale_epi(npz_path)
+            x, ale, epi = load_ale_epi_pooled_across_seeds(npz_paths)
             masks = region_masker(x)
             per_model[model_tag] = normalize_pool_aggregate(ale, epi, masks)
         out[(func_type, noise_type)] = per_model
@@ -260,7 +275,11 @@ def undersampling_region_masker(x: np.ndarray) -> Dict[str, np.ndarray]:
 
 def compute_noise_table() -> Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]]:
     """{(func_type,noise_type): {model_tag: {tau: stats or None}}}, pooled over
-    whichever tau values actually have data for that (model, DGP)."""
+    whichever tau values actually have data for that (model, DGP). Where multiple
+    seed-replicate files exist at a given tau, every seed's raw AU(x)/EU(x) is
+    pooled together first via load_ale_epi_pooled_across_seeds -- degrades to
+    exactly the single-file behavior when only one seed (or legacy no-seed data)
+    exists at that tau."""
     out: Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]] = {}
     for func_type, noise_type, _label in DGPS:
         search_dir = search_dir_standard("noise_level", noise_type, func_type, extra="normal")
@@ -268,11 +287,11 @@ def compute_noise_table() -> Dict[Tuple[str, str], Dict[str, Dict[float, Optiona
         for model_tag, _display in MODELS:
             raw_by_tau: Dict[float, Optional[Tuple[np.ndarray, np.ndarray]]] = {}
             for tau in NOISE_TAUS:
-                npz_path = resolve_latest_npz_at_tau(search_dir, model_tag, tau) if search_dir.exists() else None
-                if npz_path is None:
+                npz_paths = resolve_all_npz_at_tau(search_dir, model_tag, tau) if search_dir.exists() else []
+                if not npz_paths:
                     raw_by_tau[tau] = None
                     continue
-                _x, ale, epi = load_ale_epi(npz_path)
+                _x, ale, epi = load_ale_epi_pooled_across_seeds(npz_paths)
                 raw_by_tau[tau] = (ale, epi)
             present = {t: v for t, v in raw_by_tau.items() if v is not None}
             if not present:
@@ -360,9 +379,48 @@ def resolve_ovb_npz(model_tag: str, noise_type: str, func_type: str,
     return sorted(candidates)[-1] if candidates else None
 
 
+def resolve_all_ovb_npz(model_tag: str, noise_type: str, func_type: str,
+                         beta2: Optional[float] = None, rho: Optional[float] = None,
+                         tol: float = 1e-6) -> List[Path]:
+    """All distinct-seed OVB npz matching (beta2, rho) within tol -- composes
+    resolve_ovb_npz's content-based filter (beta2/rho are read from INSIDE each
+    npz, not parsed from the filename, unlike the pct/tau resolvers) with the same
+    seed-grouping/dedupe-by-date pattern used by resolve_all_npz_at_pct. A file
+    with no seed token (legacy OVB data, or any file saved before
+    save_ovb_model_outputs gained its seed parameter) is its own group keyed by
+    None, so it degrades to exactly resolve_ovb_npz's single-file pick when no
+    seed-tagged OVB data exists yet."""
+    search_dir = RESULTS_ROOT / "ovb" / OVB_DIR_FOR_MODEL[model_tag] / noise_type / func_type
+    if not search_dir.exists():
+        return []
+    candidates = []
+    for p in sorted(search_dir.glob(f"ovb_outputs_{model_tag}_*.npz")):
+        d = np.load(p, allow_pickle=True)
+        if "beta2" not in d.files or "rho" not in d.files:
+            continue
+        b2 = float(np.asarray(d["beta2"]).ravel()[0])
+        r = float(np.asarray(d["rho"]).ravel()[0])
+        if beta2 is not None and abs(b2 - beta2) > tol:
+            continue
+        if rho is not None and abs(r - rho) > tol:
+            continue
+        candidates.append(p)
+    if not candidates:
+        return []
+    by_seed: Dict[Optional[int], List[Path]] = defaultdict(list)
+    for p in candidates:
+        by_seed[parse_seed_from_stem(p.stem)].append(p)
+    latest_per_seed = {seed: sorted(paths)[-1] for seed, paths in by_seed.items()}
+    return [latest_per_seed[seed] for seed in sorted(latest_per_seed, key=lambda s: (s is None, s))]
+
+
 def compute_ovb_sweep_table(sweep: str) -> Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]]:
     """sweep='beta2' (fixed rho=OVB_FIXED_RHO) or 'rho' (fixed beta2=OVB_FIXED_BETA2).
-    Uses the 'omitted' (X-only) model output -- see tables/README.md for why."""
+    Uses the 'omitted' (X-only) model output -- see tables/README.md for why. Where
+    multiple seed-replicate files exist at a given knob value, every seed's raw
+    AU(x)/EU(x) is pooled together first via load_ale_epi_pooled_across_seeds --
+    degrades to exactly the single-file behavior when only one seed (or legacy
+    no-seed data) exists at that knob value."""
     values = OVB_BETA2_VALUES if sweep == "beta2" else OVB_RHO_VALUES
     fixed_kw = {"rho": OVB_FIXED_RHO} if sweep == "beta2" else {"beta2": OVB_FIXED_BETA2}
 
@@ -374,11 +432,11 @@ def compute_ovb_sweep_table(sweep: str) -> Dict[Tuple[str, str], Dict[str, Dict[
             for v in values:
                 kw = dict(fixed_kw)
                 kw[sweep] = v
-                npz_path = resolve_ovb_npz(model_tag, noise_type, func_type, **kw)
-                if npz_path is None:
+                npz_paths = resolve_all_ovb_npz(model_tag, noise_type, func_type, **kw)
+                if not npz_paths:
                     raw_by_val[v] = None
                     continue
-                _x, ale, epi = load_ale_epi(npz_path)
+                _x, ale, epi = load_ale_epi_pooled_across_seeds(npz_paths)
                 raw_by_val[v] = (ale, epi)
             present = {k: val for k, val in raw_by_val.items() if val is not None}
             if not present:
@@ -501,20 +559,20 @@ def truth_region_stats(au: np.ndarray, sigma2_true: np.ndarray) -> dict:
 def compute_region_companions(experiment: str, region_masker
                                ) -> Dict[Tuple[str, str], Dict[str, Dict[str, Optional[dict]]]]:
     """OOD / Undersampling companions: {(func_type,noise_type): {model_tag:
-    {'A':{...absolute+truth} or None, 'B':...}}}. Re-resolves the same latest npz
-    as compute_region_table (via the same resolve_latest_npz call) but keeps AU/EU
-    on the raw scale and adds the sigma^2_true(x) comparison; does not call or
-    modify compute_region_table."""
+    {'A':{...absolute+truth} or None, 'B':...}}}. Resolves every seed-replicate npz
+    for that (model, DGP) via resolve_all_npz (same resolver compute_region_table
+    uses) and pools their raw AU/EU/x together, keeping the raw scale and adding
+    the sigma^2_true(x) comparison; does not call or modify compute_region_table."""
     out: Dict[Tuple[str, str], Dict[str, Dict[str, Optional[dict]]]] = {}
     for func_type, noise_type, _label in DGPS:
         search_dir = search_dir_standard(experiment, noise_type, func_type)
         per_model: Dict[str, Dict[str, Optional[dict]]] = {}
         for model_tag, _display in MODELS:
-            npz_path = resolve_latest_npz(search_dir, (f"*{model_tag}*raw_outputs*.npz",)) if search_dir.exists() else None
-            if npz_path is None:
+            npz_paths = resolve_all_npz(search_dir, model_tag) if search_dir.exists() else []
+            if not npz_paths:
                 per_model[model_tag] = {"A": None, "B": None}
                 continue
-            x, ale, epi = load_ale_epi(npz_path)
+            x, ale, epi = load_ale_epi_pooled_across_seeds(npz_paths)
             masks = region_masker(x)
             sigma2_true = sigma_true_baseline(x, func_type, noise_type) ** 2
             cell: Dict[str, Optional[dict]] = {}
@@ -558,7 +616,11 @@ def compute_samplesize_companions() -> Dict[Tuple[str, str], Dict[str, Dict[floa
 
 def compute_noise_companions() -> Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]]:
     """{(func_type,noise_type): {model_tag: {tau: {...absolute+truth} or None}}} --
-    one region per swept tau (the whole grid at that tau)."""
+    one region per swept tau (the whole grid at that tau). Pools across
+    seed-replicate files at a fixed tau the same way compute_noise_table does
+    (load_ale_epi_pooled_across_seeds); sigma_true_noise_sweep depends only on
+    (x, noise_type, tau), all identical across seeds, so pooling before calling it
+    is safe -- see the resolve_all_npz_at_tau docstring."""
     out: Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]] = {}
     for func_type, noise_type, _label in DGPS:
         search_dir = search_dir_standard("noise_level", noise_type, func_type, extra="normal")
@@ -566,11 +628,11 @@ def compute_noise_companions() -> Dict[Tuple[str, str], Dict[str, Dict[float, Op
         for model_tag, _display in MODELS:
             result: Dict[float, Optional[dict]] = {}
             for tau in NOISE_TAUS:
-                npz_path = resolve_latest_npz_at_tau(search_dir, model_tag, tau) if search_dir.exists() else None
-                if npz_path is None:
+                npz_paths = resolve_all_npz_at_tau(search_dir, model_tag, tau) if search_dir.exists() else []
+                if not npz_paths:
                     result[tau] = None
                     continue
-                x, ale, epi = load_ale_epi(npz_path)
+                x, ale, epi = load_ale_epi_pooled_across_seeds(npz_paths)
                 sigma2_true = sigma_true_noise_sweep(x, noise_type, tau) ** 2
                 result[tau] = {**absolute_region_stats(ale, epi), **truth_region_stats(ale, sigma2_true)}
             per_model[model_tag] = result

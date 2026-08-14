@@ -107,14 +107,26 @@ than reimplemented.
 
 ## Seed handling
 
-**No seed dimension exists anywhere in the raw data** — confirmed by inspecting
-every npz across all 5 experiments; `save_model_outputs`/`save_ovb_model_outputs`
-have no `seed` parameter, and no file has a `seed` key. Every table therefore
-reports **plain values, never mean ± sd**. Some cells have duplicate-dated files
-from re-running the pipeline (OOD: 2 dates per cell; Noise-level Deep Ensemble: 2
-dates per cell, confirmed byte-identical on 3 spot-checked pairs) — these are
-literal re-saves, not independent replicates, and are deduplicated by taking the
-latest date.
+All 5 experiments now support an optional seed-replicate dimension
+(`save_model_outputs`/`save_ovb_model_outputs` both take a `seed` parameter, folded
+into the filename as a `seed{N}` token and into npz metadata). Where multiple
+seed-replicate files exist for a cell, every table here **pools** the raw AU/EU
+arrays across all found seeds (via `load_ale_epi_pooled_across_seeds`) before
+normalizing/aggregating — this is a single pooled point estimate, not a
+mean ± sd across seeds. As of this writing no experiment has seed-tagged data on
+disk yet (the seed loops were added to the notebooks but not run), so every table
+here still reflects the original single-run-per-cell behavior — confirmed via a
+full regression check (every table byte-identical before/after the seed-pooling
+code was added). If you want to directly check run-to-run variability rather than
+a pooled estimate, see `compute_samplesize_seed_spread` in
+`scripts/make_paper_tables.py` (sample-size only for now), which reports each
+seed's value independently rather than pooling them.
+
+Some cells have duplicate-dated files from re-running the pipeline (OOD: 2 dates
+per cell; Noise-level Deep Ensemble: 2 dates per cell, confirmed byte-identical on
+3 spot-checked pairs) — these are literal re-saves, not independent replicates,
+and are deduplicated by taking the latest date within each seed (or within the
+no-seed group, for cells with no seed-tagged files).
 
 ## Missing combinations (rendered as `---`)
 

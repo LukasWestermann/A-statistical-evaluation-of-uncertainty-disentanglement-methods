@@ -1161,6 +1161,7 @@ def run_mc_dropout_undersampling_experiment(
             subfolder='undersampling',
             dropout_p=p,
             mc_samples=mc_samples,
+            seed=seed,
             date=date
         )
         
@@ -1409,6 +1410,7 @@ def run_deep_ensemble_undersampling_experiment(
             func_type=func_type,
             subfolder='undersampling',
             n_nets=K,
+            seed=seed,
             date=date
         )
         
@@ -1663,6 +1665,7 @@ def run_bnn_undersampling_experiment(
             noise_type=noise_type,
             func_type=func_type,
             subfolder='undersampling',
+            seed=seed,
             date=date
         )
         
@@ -1899,6 +1902,7 @@ def run_bamlss_undersampling_experiment(
             noise_type=noise_type,
             func_type=func_type,
             subfolder='undersampling',
+            seed=seed,
             date=date
         )
         
