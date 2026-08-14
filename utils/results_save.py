@@ -1514,7 +1514,7 @@ def save_model_outputs(mu_samples, sigma2_samples, x_grid, y_grid_clean,
                       model_name='', noise_type='heteroscedastic', func_type='',
                       subfolder='', pct=None, tau=None, distribution=None,
                       dropout_p=None, mc_samples=None, n_nets=None,
-                      date=None, **kwargs):
+                      seed=None, date=None, **kwargs):
     """
     Save raw model outputs (mu_samples, sigma2_samples) to compressed numpy file.
     
@@ -1537,6 +1537,10 @@ def save_model_outputs(mu_samples, sigma2_samples, x_grid, y_grid_clean,
         dropout_p: Dropout probability for MC Dropout (optional)
         mc_samples: Number of MC samples for MC Dropout (optional)
         n_nets: Number of nets for Deep Ensemble (optional)
+        seed: Optional replicate seed -- when given, included in both the filename
+            (so multiple seed-replicate runs of the same cell don't overwrite each
+            other) and the saved metadata. None (default) reproduces today's
+            behavior exactly (no seed token anywhere).
         date: Optional date string in YYYYMMDD format
         **kwargs: Additional metadata to save
     
@@ -1609,7 +1613,9 @@ def save_model_outputs(mu_samples, sigma2_samples, x_grid, y_grid_clean,
         filename_parts.append(f"tau{tau}")
     if distribution:
         filename_parts.append(distribution)
-    
+    if seed is not None:
+        filename_parts.append(f"seed{seed}")
+
     filename_parts.append("raw_outputs")
     filename = "_".join(filename_parts)
     filename = sanitize_filename(filename)
@@ -1653,6 +1659,8 @@ def save_model_outputs(mu_samples, sigma2_samples, x_grid, y_grid_clean,
         save_dict['tau'] = np.array([tau], dtype=np.float32)
     if distribution:
         save_dict['distribution'] = np.array([distribution], dtype=object)
+    if seed is not None:
+        save_dict['seed'] = np.array([seed], dtype=np.int32)
     if dropout_p is not None:
         save_dict['dropout_p'] = np.array([dropout_p], dtype=np.float32)
     if mc_samples is not None:

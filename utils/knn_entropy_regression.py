@@ -126,6 +126,17 @@ def parse_tau_from_stem(stem: str) -> Optional[float]:
     return None
 
 
+def parse_seed_from_stem(stem: str) -> Optional[int]:
+    """Replicate seed embedded in the filename (e.g. '..._seed43_raw_outputs.npz'
+    -> 43), added by save_model_outputs' seed-replication support. None for any
+    file saved without a seed (every experiment/file predating the sample-size
+    seed-replication pilot)."""
+    m = re.search(r"seed(\d+)", stem, re.I)
+    if m:
+        return int(m.group(1))
+    return None
+
+
 def read_npz_metadata(npz_path: Path, data: Any) -> Dict[str, Any]:
     meta: Dict[str, Any] = {
         "model_name": _npz_scalar_str(data, "model_name"),
@@ -999,6 +1010,39 @@ def resolve_latest_npz_at_pct(search_dir: Path, model_tag: str, pct: float) -> O
     if not matched:
         return None
     return sorted({p.resolve() for p in matched})[-1]
+
+
+def resolve_all_npz_at_pct(search_dir: Path, model_tag: str, pct: float) -> List[Path]:
+    """All distinct-seed raw_outputs npz for model_tag at this pct -- one path per
+    seed value found (files with no seed token, i.e. every non-sample-size
+    experiment and any pre-seed-replication sample-size data, are treated as their
+    own single group keyed by None, exactly reproducing
+    resolve_latest_npz_at_pct's single-file behavior when no seed data exists yet).
+    Within each seed group, re-runs on different dates are deduped by taking the
+    latest (same 'sorted(...)[-1]' rule as every other resolver in this module).
+    Sorted by seed (None sorts first) for a deterministic return order."""
+    if not search_dir.exists():
+        return []
+    token = _pct_stem_token(pct)
+    globs = (f"*{model_tag}*pct{token}*raw_outputs*.npz",)
+    found: List[Path] = []
+    for g in globs:
+        found.extend(search_dir.rglob(g))
+    found = [p for p in found if not is_ovb_or_non_raw_path(p)]
+    matched: List[Path] = []
+    for p in found:
+        ps = parse_pct_from_stem(p.stem)
+        if ps is not None and abs(float(ps) - float(pct)) < 1e-6:
+            matched.append(p)
+    if not matched:
+        return []
+    by_seed: Dict[Optional[int], List[Path]] = defaultdict(list)
+    for p in matched:
+        by_seed[parse_seed_from_stem(p.stem)].append(p)
+    latest_per_seed = {
+        seed: sorted({p.resolve() for p in paths})[-1] for seed, paths in by_seed.items()
+    }
+    return [latest_per_seed[seed] for seed in sorted(latest_per_seed, key=lambda s: (s is None, s))]
 
 
 def resolve_latest_npz_at_tau(search_dir: Path, model_tag: str, tau: float) -> Optional[Path]:
