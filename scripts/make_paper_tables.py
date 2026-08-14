@@ -87,6 +87,7 @@ from utils.knn_entropy_regression import (  # noqa: E402
     resolve_latest_npz,
     resolve_latest_npz_at_pct,
     resolve_latest_npz_at_tau,
+    resolve_all_npz_at_pct,
 )
 
 # ============================== Scope (flip here, or override --models at the CLI) ==============================
@@ -198,6 +199,22 @@ def load_ale_epi(npz_path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     return x, ale, epi
 
 
+def load_ale_epi_pooled_across_seeds(npz_paths: List[Path]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Concatenates (x, ale, epi) across every seed-replicate file for one cell
+    (sample-size seed-replication pilot). x_grid is deterministic (independent of
+    seed -- only the training subsample differs), so this pools 'every seed's
+    fitted AU(x)/EU(x), evaluated at every x_grid point' into one array, same shape
+    convention as a single load_ale_epi call. With exactly one path (a single seed,
+    or legacy no-seed data), this is a no-op identical to load_ale_epi(npz_paths[0])."""
+    xs, ales, epis = [], [], []
+    for p in npz_paths:
+        x, ale, epi = load_ale_epi(p)
+        xs.append(x)
+        ales.append(ale)
+        epis.append(epi)
+    return np.concatenate(xs), np.concatenate(ales), np.concatenate(epis)
+
+
 # ============================== Per-experiment cell computation ==============================
 
 def search_dir_standard(experiment: str, noise_type: str, func_type: str, extra: str = "") -> Path:
@@ -282,7 +299,11 @@ def compute_noise_table() -> Dict[Tuple[str, str], Dict[str, Dict[float, Optiona
 def compute_samplesize_table() -> Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]]:
     """{(func_type,noise_type): {model_tag: {pct: stats or None}}}, pooled over
     whichever training-share (pct) values actually have data for that (model, DGP).
-    Same shape/logic as compute_noise_table, swapping tau for pct."""
+    Same shape/logic as compute_noise_table, swapping tau for pct. Where multiple
+    seed-replicate files exist for a (model, pct) cell (sample-size seed-replication
+    pilot), every seed's raw AU(x)/EU(x) is pooled together first via
+    load_ale_epi_pooled_across_seeds -- degrades to exactly the single-file behavior
+    when only one seed (or legacy no-seed data) exists."""
     out: Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]] = {}
     for func_type, noise_type, _label in DGPS:
         search_dir = search_dir_standard("sample_size", noise_type, func_type)
@@ -290,11 +311,11 @@ def compute_samplesize_table() -> Dict[Tuple[str, str], Dict[str, Dict[float, Op
         for model_tag, _display in MODELS:
             raw_by_pct: Dict[float, Optional[Tuple[np.ndarray, np.ndarray]]] = {}
             for pct in SAMPLE_SIZE_PCTS:
-                npz_path = resolve_latest_npz_at_pct(search_dir, model_tag, pct) if search_dir.exists() else None
-                if npz_path is None:
+                npz_paths = resolve_all_npz_at_pct(search_dir, model_tag, pct) if search_dir.exists() else []
+                if not npz_paths:
                     raw_by_pct[pct] = None
                     continue
-                _x, ale, epi = load_ale_epi(npz_path)
+                _x, ale, epi = load_ale_epi_pooled_across_seeds(npz_paths)
                 raw_by_pct[pct] = (ale, epi)
             present = {p: v for p, v in raw_by_pct.items() if v is not None}
             if not present:
@@ -513,7 +534,9 @@ def compute_region_companions(experiment: str, region_masker
 def compute_samplesize_companions() -> Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]]:
     """{(func_type,noise_type): {model_tag: {pct: {...absolute+truth} or None}}} --
     one region per swept training share (the whole grid at that pct), matching
-    tab_samplesize.tex's row structure (no ID/OOD-style sub-split)."""
+    tab_samplesize.tex's row structure (no ID/OOD-style sub-split). Pools across
+    seed-replicate files the same way compute_samplesize_table does (see
+    load_ale_epi_pooled_across_seeds) when multiple seeds exist for a cell."""
     out: Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]] = {}
     for func_type, noise_type, _label in DGPS:
         search_dir = search_dir_standard("sample_size", noise_type, func_type)
@@ -521,11 +544,11 @@ def compute_samplesize_companions() -> Dict[Tuple[str, str], Dict[str, Dict[floa
         for model_tag, _display in MODELS:
             result: Dict[float, Optional[dict]] = {}
             for pct in SAMPLE_SIZE_PCTS:
-                npz_path = resolve_latest_npz_at_pct(search_dir, model_tag, pct) if search_dir.exists() else None
-                if npz_path is None:
+                npz_paths = resolve_all_npz_at_pct(search_dir, model_tag, pct) if search_dir.exists() else []
+                if not npz_paths:
                     result[pct] = None
                     continue
-                x, ale, epi = load_ale_epi(npz_path)
+                x, ale, epi = load_ale_epi_pooled_across_seeds(npz_paths)
                 sigma2_true = sigma_true_baseline(x, func_type, noise_type) ** 2
                 result[pct] = {**absolute_region_stats(ale, epi), **truth_region_stats(ale, sigma2_true)}
             per_model[model_tag] = result
@@ -550,6 +573,47 @@ def compute_noise_companions() -> Dict[Tuple[str, str], Dict[str, Dict[float, Op
                 x, ale, epi = load_ale_epi(npz_path)
                 sigma2_true = sigma_true_noise_sweep(x, noise_type, tau) ** 2
                 result[tau] = {**absolute_region_stats(ale, epi), **truth_region_stats(ale, sigma2_true)}
+            per_model[model_tag] = result
+        out[(func_type, noise_type)] = per_model
+    return out
+
+
+def compute_samplesize_seed_spread() -> Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]]:
+    """Sample-size seed-replication pilot diagnostic: per (DGP, model, pct) with >=2
+    seed-replicate files available, computes mean_au/mean_eu INDEPENDENTLY per seed
+    (not pooled -- pooling is what compute_samplesize_table/companions already do,
+    and it hides exactly the run-to-run spread this is meant to surface), then
+    reports mean-across-seeds +/- sd-across-seeds (population, ddof=0) of each,
+    plus how many seeds were actually found. This is the direct answer to 'is this
+    trend real or just this one random draw' -- a wide spread here means the
+    corresponding tab_samplesize*.tex cell is not settled with only 1-2 seeds.
+    Cells with 0-1 seeds return None (not a fabricated zero-spread)."""
+    out: Dict[Tuple[str, str], Dict[str, Dict[float, Optional[dict]]]] = {}
+    for func_type, noise_type, _label in DGPS:
+        search_dir = search_dir_standard("sample_size", noise_type, func_type)
+        per_model: Dict[str, Dict[float, Optional[dict]]] = {}
+        for model_tag, _display in MODELS:
+            result: Dict[float, Optional[dict]] = {}
+            for pct in SAMPLE_SIZE_PCTS:
+                npz_paths = resolve_all_npz_at_pct(search_dir, model_tag, pct) if search_dir.exists() else []
+                if len(npz_paths) < 2:
+                    result[pct] = None if not npz_paths else {"n_seeds_found": len(npz_paths)}
+                    continue
+                per_seed_au, per_seed_eu = [], []
+                for p in npz_paths:
+                    _x, ale, epi = load_ale_epi(p)
+                    stats = absolute_region_stats(ale, epi)
+                    per_seed_au.append(stats["mean_au"])
+                    per_seed_eu.append(stats["mean_eu"])
+                per_seed_au_arr = np.array(per_seed_au)
+                per_seed_eu_arr = np.array(per_seed_eu)
+                result[pct] = {
+                    "n_seeds_found": len(npz_paths),
+                    "au_mean_across_seeds": float(np.mean(per_seed_au_arr)),
+                    "au_sd_across_seeds": float(np.std(per_seed_au_arr, ddof=0)),
+                    "eu_mean_across_seeds": float(np.mean(per_seed_eu_arr)),
+                    "eu_sd_across_seeds": float(np.std(per_seed_eu_arr, ddof=0)),
+                }
             per_model[model_tag] = result
         out[(func_type, noise_type)] = per_model
     return out
@@ -1264,6 +1328,29 @@ def main():
                 print(f"  {dgp_label}/{model_tag}: n_tau={s['n_points']} pearson={s['pearson']:.3f} "
                       f"spearman={s['spearman'] if s['spearman'] is None else round(s['spearman'], 3)}")
     print_sigma2_variance_diagnostics()
+
+    # ---- Sample-size seed-replication pilot: is the trend real or just chance? ----
+    print("\n" + "=" * 70)
+    print("SAMPLE-SIZE SEED SPREAD (seed-replication pilot)")
+    print("=" * 70)
+    seed_spread = compute_samplesize_seed_spread()
+    any_multi_seed_cell = False
+    for func_type, noise_type, dgp_label in DGPS:
+        for model_tag, _display in MODELS:
+            for pct in SAMPLE_SIZE_PCTS:
+                s = seed_spread[(func_type, noise_type)][model_tag][pct]
+                if s is None:
+                    continue
+                if "au_mean_across_seeds" not in s:
+                    print(f"  {dgp_label}/{model_tag}/pct={pct}: only {s['n_seeds_found']} seed found -- spread not meaningful")
+                    continue
+                any_multi_seed_cell = True
+                print(f"  {dgp_label}/{model_tag}/pct={pct}: n_seeds={s['n_seeds_found']} "
+                      f"AU={s['au_mean_across_seeds']:.4g}+/-{s['au_sd_across_seeds']:.4g} "
+                      f"EU={s['eu_mean_across_seeds']:.4g}+/-{s['eu_sd_across_seeds']:.4g}")
+    if not any_multi_seed_cell:
+        print("  No cell has >=2 seed-replicate files yet -- run the sample-size "
+              "notebook's seed loop (Experiments/Sample Size.ipynb) to populate this.")
 
     # ---- Headline summary (deliverable #4) ----
     print("\n" + "=" * 70)

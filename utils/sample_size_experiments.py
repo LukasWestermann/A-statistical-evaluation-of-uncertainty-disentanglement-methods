@@ -60,26 +60,29 @@ except RuntimeError:
 def _train_single_percentage_mc_dropout(args):
     """Wrapper function for training MC Dropout at a single percentage (for parallel execution)."""
     (worker_id, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-     seed, p, beta, epochs, lr, batch_size, mc_samples, func_type, noise_type, entropy_method) = args
-    
+     seed, p, beta, epochs, lr, batch_size, mc_samples, func_type, noise_type, entropy_method, perm) = args
+
     # Set device for this worker
     device = get_device_for_worker(worker_id)
     torch.cuda.set_device(device) if device.type == 'cuda' else None
-    
-    # Set seed for reproducibility
+
+    # Set seed for reproducibility (model-training randomness only -- the data
+    # subset itself comes from the shared `perm`, not this seed, so percentages
+    # are nested rather than independent draws; see run_mc_dropout_sample_size_experiment)
     np.random.seed(seed + int(pct))
     torch.manual_seed(seed + int(pct))
-    
+
     from Models.MC_Dropout import (
         MCDropoutRegressor,
         train_model,
         mc_dropout_predict
     )
-    
-    # Subsample data
+
+    # Subsample data: nested prefix of the shared permutation, so the pct% subset
+    # is always a subset of every larger percentage's subset.
     n_train_full_actual = len(x_train_full)
     n_samples = int(n_train_full_actual * pct / 100)
-    indices = np.random.choice(n_train_full_actual, size=n_samples, replace=False)
+    indices = perm[:n_samples]
     x_train_subset = x_train_full[indices]
     y_train_subset = y_train_full[indices]
     
@@ -113,16 +116,18 @@ def _train_single_percentage_mc_dropout(args):
 def _train_single_percentage_deep_ensemble(args):
     """Wrapper function for training Deep Ensemble at a single percentage (for parallel execution)."""
     (worker_id, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-     seed, beta, batch_size, K, epochs, func_type, noise_type, entropy_method) = args
-    
+     seed, beta, batch_size, K, epochs, func_type, noise_type, entropy_method, perm) = args
+
     # Set device for this worker
     device = get_device_for_worker(worker_id)
     torch.cuda.set_device(device) if device.type == 'cuda' else None
-    
-    # Set seed for reproducibility
+
+    # Set seed for reproducibility (model-training randomness only -- the data
+    # subset itself comes from the shared `perm`, not this seed, so percentages
+    # are nested rather than independent draws; see run_deep_ensemble_sample_size_experiment)
     np.random.seed(seed + int(pct))
     torch.manual_seed(seed + int(pct))
-    
+
     from Models.Deep_Ensemble import (
         train_ensemble_deep,
         ensemble_predict_deep
@@ -131,11 +136,12 @@ def _train_single_percentage_deep_ensemble(args):
         normalize_x,
         normalize_x_data
     )
-    
-    # Subsample data
+
+    # Subsample data: nested prefix of the shared permutation, so the pct% subset
+    # is always a subset of every larger percentage's subset.
     n_train_full_actual = len(x_train_full)
     n_samples = int(n_train_full_actual * pct / 100)
-    indices = np.random.choice(n_train_full_actual, size=n_samples, replace=False)
+    indices = perm[:n_samples]
     x_train_subset = x_train_full[indices]
     y_train_subset = y_train_full[indices]
     
@@ -173,23 +179,26 @@ def _train_single_percentage_deep_ensemble(args):
 def _train_single_percentage_bnn(args):
     """Wrapper function for training BNN at a single percentage (for parallel execution)."""
     (worker_id, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-     seed, hidden_width, weight_scale, warmup, samples, chains, func_type, noise_type, entropy_method) = args
-    
-    # Set seed for reproducibility
+     seed, hidden_width, weight_scale, warmup, samples, chains, func_type, noise_type, entropy_method, perm) = args
+
+    # Set seed for reproducibility (model-training randomness only -- the data
+    # subset itself comes from the shared `perm`, not this seed, so percentages
+    # are nested rather than independent draws; see run_bnn_sample_size_experiment)
     np.random.seed(seed + int(pct))
     torch.manual_seed(seed + int(pct))
-    
+
     from Models.BNN import (
         train_bnn,
         bnn_predict,
         normalize_x as bnn_normalize_x,
         normalize_x_data as bnn_normalize_x_data
     )
-    
-    # Subsample data
+
+    # Subsample data: nested prefix of the shared permutation, so the pct% subset
+    # is always a subset of every larger percentage's subset.
     n_train_full_actual = len(x_train_full)
     n_samples = int(n_train_full_actual * pct / 100)
-    indices = np.random.choice(n_train_full_actual, size=n_samples, replace=False)
+    indices = perm[:n_samples]
     x_train_subset = x_train_full[indices]
     y_train_subset = y_train_full[indices]
     
@@ -231,17 +240,20 @@ def _train_single_percentage_bnn(args):
 def _train_single_percentage_bamlss(args):
     """Wrapper function for training BAMLSS at a single percentage (for parallel execution)."""
     (worker_id, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-     seed, n_iter, burnin, thin, nsamples, func_type, noise_type, entropy_method) = args
-    
-    # Set seed for reproducibility
+     seed, n_iter, burnin, thin, nsamples, func_type, noise_type, entropy_method, perm) = args
+
+    # Set seed for reproducibility (model-training randomness only -- the data
+    # subset itself comes from the shared `perm`, not this seed, so percentages
+    # are nested rather than independent draws; see run_bamlss_sample_size_experiment)
     np.random.seed(seed + int(pct))
     torch.manual_seed(seed + int(pct))
-    
+
     from Models.BAMLSS import bamlss_predict
-    # Subsample data
+    # Subsample data: nested prefix of the shared permutation, so the pct% subset
+    # is always a subset of every larger percentage's subset.
     n_train_full_actual = len(x_train_full)
     n_samples = int(n_train_full_actual * pct / 100)
-    indices = np.random.choice(n_train_full_actual, size=n_samples, replace=False)
+    indices = perm[:n_samples]
     x_train_subset = x_train_full[indices]
     y_train_subset = y_train_full[indices]
     
@@ -719,6 +731,12 @@ def run_mc_dropout_sample_size_experiment(
         )
         
         n_train_full_actual = len(x_train_full)
+
+        # Single shared permutation for the whole sweep: every percentage's subset
+        # is a prefix of this permutation, so smaller percentages are always subsets
+        # of larger ones (nested), rather than independent draws per percentage.
+        np.random.seed(seed)
+        perm = np.random.permutation(n_train_full_actual)
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         uncertainties_entropy_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
@@ -744,7 +762,7 @@ def run_mc_dropout_sample_size_experiment(
             args_list = []
             for idx, pct in enumerate(percentages):
                 args = (idx, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-                       seed, p, beta, epochs, lr, batch_size, mc_samples, func_type, noise_type, entropy_method)
+                       seed, p, beta, epochs, lr, batch_size, mc_samples, func_type, noise_type, entropy_method, perm)
                 args_list.append(args)
             
             # Execute in parallel
@@ -784,6 +802,7 @@ def run_mc_dropout_sample_size_experiment(
                         pct=pct,
                         dropout_p=p,
                         mc_samples=mc_samples,
+                        seed=seed,
                         date=date
                     )
                     
@@ -845,9 +864,10 @@ def run_mc_dropout_sample_size_experiment(
                 np.random.seed(seed)
                 torch.manual_seed(seed)
                 
-                # Subsample data
+                # Subsample data: nested prefix of the shared permutation (see above),
+                # so the pct% subset is always a subset of every larger percentage's subset.
                 n_samples = int(n_train_full_actual * pct / 100)
-                indices = np.random.choice(n_train_full_actual, size=n_samples, replace=False)
+                indices = perm[:n_samples]
                 x_train_subset = x_train_full[indices]
                 y_train_subset = y_train_full[indices]
                 
@@ -917,6 +937,7 @@ def run_mc_dropout_sample_size_experiment(
                     pct=pct,
                     dropout_p=p,
                     mc_samples=mc_samples,
+                    seed=seed,
                     date=date
                 )
                 
@@ -1064,6 +1085,12 @@ def run_deep_ensemble_sample_size_experiment(
         )
         
         n_train_full_actual = len(x_train_full)
+
+        # Single shared permutation for the whole sweep: every percentage's subset
+        # is a prefix of this permutation, so smaller percentages are always subsets
+        # of larger ones (nested), rather than independent draws per percentage.
+        np.random.seed(seed)
+        perm = np.random.permutation(n_train_full_actual)
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         uncertainties_entropy_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
@@ -1081,7 +1108,7 @@ def run_deep_ensemble_sample_size_experiment(
             print(f"Using {'GPU' if use_gpu else 'CPU'} parallelization with {max_workers} workers")
             
             args_list = [(idx, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-                         seed, beta, batch_size, K, epochs, func_type, noise_type, entropy_method)
+                         seed, beta, batch_size, K, epochs, func_type, noise_type, entropy_method, perm)
                         for idx, pct in enumerate(percentages)]
             
             try:
@@ -1136,6 +1163,7 @@ def run_deep_ensemble_sample_size_experiment(
                         subfolder='sample_size',
                         pct=pct,
                         n_nets=K,
+                        seed=seed,
                         date=date
                     )
                     
@@ -1267,6 +1295,7 @@ def run_deep_ensemble_sample_size_experiment(
                     subfolder='sample_size',
                     pct=pct,
                     n_nets=K,
+                    seed=seed,
                     date=date
                 )
                 
@@ -1416,6 +1445,12 @@ def run_bnn_sample_size_experiment(
         )
         
         n_train_full_actual = len(x_train_full)
+
+        # Single shared permutation for the whole sweep: every percentage's subset
+        # is a prefix of this permutation, so smaller percentages are always subsets
+        # of larger ones (nested), rather than independent draws per percentage.
+        np.random.seed(seed)
+        perm = np.random.permutation(n_train_full_actual)
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         uncertainties_entropy_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
@@ -1432,7 +1467,7 @@ def run_bnn_sample_size_experiment(
             print(f"Using {'GPU' if use_gpu else 'CPU'} parallelization with {max_workers} workers")
             
             args_list = [(idx, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-                         seed, hidden_width, weight_scale, warmup, samples, chains, func_type, noise_type, entropy_method)
+                         seed, hidden_width, weight_scale, warmup, samples, chains, func_type, noise_type, entropy_method, perm)
                         for idx, pct in enumerate(percentages)]
             
             try:
@@ -1486,6 +1521,7 @@ def run_bnn_sample_size_experiment(
                         func_type=func_type,
                         subfolder='sample_size',
                         pct=pct,
+                        seed=seed,
                         date=date
                     )
                     
@@ -1618,6 +1654,7 @@ def run_bnn_sample_size_experiment(
                     func_type=func_type,
                     subfolder='sample_size',
                     pct=pct,
+                    seed=seed,
                     date=date
                 )
                 
@@ -1759,6 +1796,12 @@ def run_bamlss_sample_size_experiment(
         )
         
         n_train_full_actual = len(x_train_full)
+
+        # Single shared permutation for the whole sweep: every percentage's subset
+        # is a prefix of this permutation, so smaller percentages are always subsets
+        # of larger ones (nested), rather than independent draws per percentage.
+        np.random.seed(seed)
+        perm = np.random.permutation(n_train_full_actual)
         uncertainties_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         uncertainties_entropy_by_pct = {pct: {'ale': [], 'epi': [], 'tot': []} for pct in percentages}
         mse_by_pct = {pct: [] for pct in percentages}
@@ -1773,7 +1816,7 @@ def run_bamlss_sample_size_experiment(
             print(f"Using CPU parallelization with {max_workers} workers (BAMLSS is CPU-only)")
             
             args_list = [(idx, pct, x_train_full, y_train_full, x_grid, y_grid_clean,
-                         seed, n_iter, burnin, thin, nsamples, func_type, noise_type, entropy_method)
+                         seed, n_iter, burnin, thin, nsamples, func_type, noise_type, entropy_method, perm)
                         for idx, pct in enumerate(percentages)]
             
             try:
@@ -1823,6 +1866,7 @@ def run_bamlss_sample_size_experiment(
                         func_type=func_type,
                         subfolder='sample_size',
                         pct=pct,
+                        seed=seed,
                         date=date
                     )
                     
@@ -1945,6 +1989,7 @@ def run_bamlss_sample_size_experiment(
                     func_type=func_type,
                     subfolder='sample_size',
                     pct=pct,
+                    seed=seed,
                     date=date
                 )
                 
