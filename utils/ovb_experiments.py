@@ -20,6 +20,7 @@ from concurrent.futures import ProcessPoolExecutor
 import matplotlib.pyplot as plt
 import multiprocessing
 from datetime import datetime
+from typing import Optional
 import pandas as pd
 from pathlib import Path
 
@@ -277,6 +278,7 @@ def save_ovb_model_outputs(
     param_name: str = 'rho',
     model_name: str = 'MC_Dropout',
     entropy_method: str = 'moment_matched',
+    seed: Optional[int] = None,
     mu_samples_full=None,
     sigma2_samples_full=None,
     X_full=None,
@@ -297,17 +299,22 @@ def save_ovb_model_outputs(
     Optional keys (only if not None):
         mu_samples_full, sigma2_samples_full, X_full — full model on training (X, Z).
         mu_samples_2d, sigma2_samples_2d, X_grid_2d, Z_grid_2d — 2D heatmap grid.
+        seed — replicate seed (seed-replication pilot); folded into both the
+        filename and metadata when given, same convention as
+        utils.results_save.save_model_outputs. None (default) reproduces the
+        original filename/metadata exactly.
 
     For model_name=='BAMLSS', mu/sigma arrays are transposed to (S, N) when they
     arrive as (N, S) with N grid/training points.
     """
     date = datetime.now().strftime('%Y%m%d')
     safe_model = sanitize_filename(model_name)
+    seed_token = f"_seed{seed}" if seed is not None else ""
 
     if param_name == 'rho':
-        filename = f"ovb_outputs_{safe_model}_rho{rho:.2f}_beta2{beta2:.2f}_{date}.npz"
+        filename = f"ovb_outputs_{safe_model}_rho{rho:.2f}_beta2{beta2:.2f}{seed_token}_{date}.npz"
     else:
-        filename = f"ovb_outputs_{safe_model}_beta2{beta2:.2f}_rho{rho:.2f}_{date}.npz"
+        filename = f"ovb_outputs_{safe_model}_beta2{beta2:.2f}_rho{rho:.2f}{seed_token}_{date}.npz"
 
     filepath = Path(results_dir) / filename
     n_grid = int(np.asarray(x_grid).ravel().shape[0])
@@ -336,6 +343,8 @@ def save_ovb_model_outputs(
         'entropy_method': np.array([entropy_method], dtype=object),
         'param_name': np.array([param_name], dtype=object),
     }
+    if seed is not None:
+        save_dict['seed'] = np.array([seed], dtype=np.int32)
 
     if mu_samples_full is not None and sigma2_samples_full is not None:
         n_full = int(np.asarray(Y).shape[0])
@@ -736,7 +745,7 @@ def run_mc_dropout_ovb_rho_experiment(
                 ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
                 rho=rho, beta2=beta2, func_type=func_type, noise_type=noise_type,
                 results_dir=save_dir, param_name='rho',
-                model_name='MC_Dropout', entropy_method=entropy_method,
+                model_name='MC_Dropout', entropy_method=entropy_method, seed=seed,
                 mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
                 X_full=X_full,
                 mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
@@ -1129,7 +1138,7 @@ def run_mc_dropout_ovb_beta2_experiment(
                 ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
                 rho=rho, beta2=beta2_val, func_type=func_type, noise_type=noise_type,
                 results_dir=save_dir, param_name='beta2',
-                model_name='MC_Dropout', entropy_method=entropy_method,
+                model_name='MC_Dropout', entropy_method=entropy_method, seed=seed,
                 mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
                 X_full=X_full,
                 mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
@@ -1380,7 +1389,7 @@ def run_deep_ensemble_ovb_rho_experiment(
                 ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
                 rho=rho, beta2=beta2, func_type=func_type, noise_type=noise_type,
                 results_dir=save_dir, param_name='rho',
-                model_name='Deep_Ensemble', entropy_method=entropy_method,
+                model_name='Deep_Ensemble', entropy_method=entropy_method, seed=seed,
                 mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
                 X_full=X_full,
                 mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
@@ -1599,7 +1608,7 @@ def run_deep_ensemble_ovb_beta2_experiment(
                 ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
                 rho=rho, beta2=beta2_val, func_type=func_type, noise_type=noise_type,
                 results_dir=save_dir, param_name='beta2',
-                model_name='Deep_Ensemble', entropy_method=entropy_method,
+                model_name='Deep_Ensemble', entropy_method=entropy_method, seed=seed,
                 mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
                 X_full=X_full,
                 mu_samples_2d=result_2d[4][0], sigma2_samples_2d=result_2d[4][1],
@@ -1828,7 +1837,7 @@ def run_bnn_ovb_rho_experiment(
                 ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
                 rho=rho, beta2=beta2, func_type=func_type, noise_type=noise_type,
                 results_dir=save_dir, param_name='rho',
-                model_name='BNN', entropy_method=entropy_method,
+                model_name='BNN', entropy_method=entropy_method, seed=seed,
                 mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
                 X_full=X_full,
                 mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
@@ -2050,7 +2059,7 @@ def run_bnn_ovb_beta2_experiment(
                 ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
                 rho=rho, beta2=beta2_val, func_type=func_type, noise_type=noise_type,
                 results_dir=save_dir, param_name='beta2',
-                model_name='BNN', entropy_method=entropy_method,
+                model_name='BNN', entropy_method=entropy_method, seed=seed,
                 mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
                 X_full=X_full,
                 mu_samples_2d=result_2d[4][0], sigma2_samples_2d=result_2d[4][1],
@@ -2271,7 +2280,7 @@ def run_bamlss_ovb_rho_experiment(
                 ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
                 rho=rho, beta2=beta2, func_type=func_type, noise_type=noise_type,
                 results_dir=save_dir, param_name='rho',
-                model_name='BAMLSS', entropy_method=entropy_method,
+                model_name='BAMLSS', entropy_method=entropy_method, seed=seed,
                 mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
                 X_full=X_full_ovb,
                 mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,
@@ -2485,7 +2494,7 @@ def run_bamlss_ovb_beta2_experiment(
                 ale_entropy=ale_entropy, epi_entropy=epi_entropy, tot_entropy=tot_entropy,
                 rho=rho, beta2=beta2_val, func_type=func_type, noise_type=noise_type,
                 results_dir=save_dir, param_name='beta2',
-                model_name='BAMLSS', entropy_method=entropy_method,
+                model_name='BAMLSS', entropy_method=entropy_method, seed=seed,
                 mu_samples_full=mu_samples_full, sigma2_samples_full=sigma2_samples_full,
                 X_full=X_full_ovb,
                 mu_samples_2d=mu_samples_2d, sigma2_samples_2d=sigma2_samples_2d,

@@ -943,6 +943,32 @@ def resolve_latest_npz(search_dir: Path, globs: Tuple[str, ...]) -> Optional[Pat
     return sorted({p.resolve() for p in found})[-1]
 
 
+def resolve_all_npz(search_dir: Path, model_tag: str) -> List[Path]:
+    """All distinct-seed raw_outputs npz for model_tag under search_dir -- the
+    no-swept-knob analog of resolve_all_npz_at_pct, for experiments (OOD,
+    undersampling) that save exactly one file per (model, DGP) rather than
+    sweeping a pct/tau knob. Same grouping/dedup rule: group by
+    parse_seed_from_stem (None for legacy pre-seed-replication files, its own
+    single group), take the latest date within each seed group, return one path
+    per distinct seed sorted with None first. Degrades to exactly
+    resolve_latest_npz's single-file pick when no seed data exists yet."""
+    if not search_dir.exists():
+        return []
+    found: List[Path] = []
+    for g in (f"*{model_tag}*raw_outputs*.npz",):
+        found.extend(search_dir.rglob(g))
+    found = [p for p in found if not is_ovb_or_non_raw_path(p)]
+    if not found:
+        return []
+    by_seed: Dict[Optional[int], List[Path]] = defaultdict(list)
+    for p in found:
+        by_seed[parse_seed_from_stem(p.stem)].append(p)
+    latest_per_seed = {
+        seed: sorted({p.resolve() for p in paths})[-1] for seed, paths in by_seed.items()
+    }
+    return [latest_per_seed[seed] for seed in sorted(latest_per_seed, key=lambda s: (s is None, s))]
+
+
 def collect_raw_npz_files(search_dir: Path) -> List[Path]:
     if not search_dir.exists():
         return []
@@ -1062,6 +1088,36 @@ def resolve_latest_npz_at_tau(search_dir: Path, model_tag: str, tau: float) -> O
     if not matched:
         return None
     return sorted({p.resolve() for p in matched})[-1]
+
+
+def resolve_all_npz_at_tau(search_dir: Path, model_tag: str, tau: float) -> List[Path]:
+    """All distinct-seed raw_outputs npz for model_tag at this tau -- the
+    noise-level analog of resolve_all_npz_at_pct, reusing resolve_latest_npz_at_tau's
+    same untokenized '*tau*' glob + parse_tau_from_stem filter (no _tau_stem_token
+    helper needed, matching how resolve_latest_npz_at_tau already works). Groups
+    survivors by parse_seed_from_stem, takes the latest date within each seed
+    group, returns one path per distinct seed sorted with None first."""
+    if not search_dir.exists():
+        return []
+    globs = (f"*{model_tag}*tau*raw_outputs*.npz",)
+    found: List[Path] = []
+    for g in globs:
+        found.extend(search_dir.rglob(g))
+    found = [p for p in found if not is_ovb_or_non_raw_path(p)]
+    matched: List[Path] = []
+    for p in found:
+        tv = parse_tau_from_stem(p.stem)
+        if tv is not None and abs(float(tv) - float(tau)) < 1e-5:
+            matched.append(p)
+    if not matched:
+        return []
+    by_seed: Dict[Optional[int], List[Path]] = defaultdict(list)
+    for p in matched:
+        by_seed[parse_seed_from_stem(p.stem)].append(p)
+    latest_per_seed = {
+        seed: sorted({p.resolve() for p in paths})[-1] for seed, paths in by_seed.items()
+    }
+    return [latest_per_seed[seed] for seed in sorted(latest_per_seed, key=lambda s: (s is None, s))]
 
 
 def save_stats_excel(df: pd.DataFrame, out_dir: Path, filename_stem: str) -> Path:

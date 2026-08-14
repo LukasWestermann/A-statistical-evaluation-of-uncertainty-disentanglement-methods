@@ -980,6 +980,7 @@ def run_mc_dropout_ood_experiment(
             subfolder='ood',
             dropout_p=p,
             mc_samples=mc_samples,
+            seed=seed,
             date=date
         )
         
@@ -1284,6 +1285,7 @@ def run_deep_ensemble_ood_experiment(
             func_type=func_type,
             subfolder='ood',
             n_nets=K,
+            seed=seed,
             date=date
         )
         
@@ -1593,6 +1595,7 @@ def run_bnn_ood_experiment(
             noise_type=noise_type,
             func_type=func_type,
             subfolder='ood',
+            seed=seed,
             date=date
         )
         
@@ -1884,6 +1887,7 @@ def run_bamlss_ood_experiment(
             noise_type=noise_type,
             func_type=func_type,
             subfolder='ood',
+            seed=seed,
             date=date
         )
         
