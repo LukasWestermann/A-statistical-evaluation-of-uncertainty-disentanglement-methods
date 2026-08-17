@@ -48,15 +48,12 @@ seed/date: seed is read from npz metadata (None/NaN for legacy pre-pilot files).
 date is NOT stored as npz metadata for OVB (only baked into the filename) --
 parsed from the filename's trailing YYYYMMDD token instead.
 
-Also includes, per row, the same analytic exact-expected-score columns the new OVB
-CRPS/NLL capability in utils/ovb_experiments.py uses (utils.analytic_scores.
-score_bundle_pointwise): CRPS_mixture/NLL_mixture (primary), CRPS_gaussian/NLL_gaussian
-(secondary, moment-matched, labeled), Oracle_CRPS/Oracle_NLL, IQD, KL/KL_mean/KL_spread
-(the flagship OVB diagnostic -- KL_spread should stay small while KL_mean carries the
-omitted-variable signal). "omitted" rows are scored against the INFLATED target
-N(y_true, sigma2_true_omitted_target); "full" rows against N(y_true, sigma2_true_intrinsic)
--- i.e. each which_model row is scored against its own correct column above, not against
-sigma2_true_intrinsic unconditionally.
+This script is the raw AU/EU/TU export only -- it does NOT compute CRPS/NLL/oracle
+scoring (see scripts/export_raw_au_eu_csv.py's docstring for why: score_bundle_pointwise's
+closed-form mixture term is O(M^2 * N) in memory, and large-M files here get OOM-killed).
+For the OVB CRPS/NLL diagnostic (KL_mean/KL_spread), use utils/ovb_experiments.py's own
+run-time scoring, or call utils.analytic_scores.score_bundle_pointwise directly on one
+saved file.
 
 Usage:
     python scripts/export_ovb_raw_au_eu_csv.py
@@ -83,8 +80,6 @@ from utils.knn_entropy_regression import (  # noqa: E402
 )
 from utils.mixture_metrics import get_dgp  # noqa: E402
 from utils.entropy_uncertainty import entropy_uncertainty_by_method  # noqa: E402
-from utils.metrics import compute_predictive_aggregation  # noqa: E402
-from utils.analytic_scores import score_bundle_pointwise  # noqa: E402
 import utils.predictive_eval_io as pio  # noqa: E402
 
 RESULTS_ROOT = project_root / "results"
@@ -117,29 +112,6 @@ def _member_stats(mu_samples: np.ndarray, sigma2_samples: np.ndarray, n_points: 
     return mu_pred, au, au + eu, eu, au_entropy, eu_entropy, tu_entropy
 
 
-def _score_columns(mu_samples: np.ndarray, sigma2_samples: np.ndarray, n_points: int,
-                    mu_true: np.ndarray, sigma_true: np.ndarray) -> dict:
-    """Analytic exact-expected CRPS/NLL columns for one which_model block, scored against
-    N(mu_true, sigma_true^2). Re-normalizes mu_samples/sigma2_samples (cheap, mirrors
-    _member_stats) rather than threading its internal (mu, sig) out, to keep
-    _member_stats's existing signature/callers untouched."""
-    mu, sig = ensure_samples_first(mu_samples, sigma2_samples, np.zeros(n_points))
-    mu_star, sigma2_star = compute_predictive_aggregation(mu, sig)
-    scores = score_bundle_pointwise(mu, sig, mu_star, sigma2_star, mu_true, sigma_true)
-    return {
-        "CRPS_mixture": np.asarray(scores["crps_mixture"]).ravel(),
-        "NLL_mixture": np.asarray(scores["nll_mixture"]).ravel(),
-        "CRPS_gaussian": np.asarray(scores["crps_gaussian"]).ravel(),
-        "NLL_gaussian": np.asarray(scores["nll_gaussian"]).ravel(),
-        "Oracle_CRPS": np.asarray(scores["oracle_crps"]).ravel(),
-        "Oracle_NLL": np.asarray(scores["oracle_nll"]).ravel(),
-        "IQD": np.asarray(scores["iqd"]).ravel(),
-        "KL": np.asarray(scores["kl"]).ravel(),
-        "KL_mean": np.asarray(scores["kl_mean"]).ravel(),
-        "KL_spread": np.asarray(scores["kl_spread"]).ravel(),
-    }
-
-
 def _rows_for_npz(npz_path: Path, search_dir: Path) -> pd.DataFrame:
     d = np.load(npz_path, allow_pickle=True)
     func_type = _npz_scalar_str(d, "func_type")
@@ -163,8 +135,6 @@ def _rows_for_npz(npz_path: Path, search_dir: Path) -> pd.DataFrame:
     sigma2_true_intrinsic = sigma_fn(x_grid) ** 2
     sigma2_true_omitted_target = sigma2_true_intrinsic + omitted_inflation
     n = len(x_grid)
-    scores_omitted = _score_columns(d["mu_samples"], d["sigma2_samples"], n,
-                                     y_true_omitted, np.sqrt(sigma2_true_omitted_target))
     blocks.append(pd.DataFrame({
         "model_name": [model_name] * n, "noise_type": [noise_type] * n, "func_type": [func_type] * n,
         "rho": [rho] * n, "beta2": [beta2] * n, "seed": [seed] * n, "date": [date] * n,
@@ -172,7 +142,6 @@ def _rows_for_npz(npz_path: Path, search_dir: Path) -> pd.DataFrame:
         "AU_entropy": au_ent, "EU_entropy": eu_ent, "TU_entropy": tu_ent,
         "sigma2_true_intrinsic": sigma2_true_intrinsic,
         "sigma2_true_omitted_target": sigma2_true_omitted_target,
-        **scores_omitted,
         "which_model": ["omitted"] * n, "source_file": [source_file] * n,
     }))
 
@@ -188,8 +157,6 @@ def _rows_for_npz(npz_path: Path, search_dir: Path) -> pd.DataFrame:
         )
         sigma2_true_intrinsic_f = sigma_fn(x_full) ** 2
         nf = len(x_full)
-        scores_full = _score_columns(d["mu_samples_full"], d["sigma2_samples_full"], nf,
-                                      y_true_full, np.sqrt(sigma2_true_intrinsic_f))
         blocks.append(pd.DataFrame({
             "model_name": [model_name] * nf, "noise_type": [noise_type] * nf, "func_type": [func_type] * nf,
             "rho": [rho] * nf, "beta2": [beta2] * nf, "seed": [seed] * nf, "date": [date] * nf,
@@ -197,7 +164,6 @@ def _rows_for_npz(npz_path: Path, search_dir: Path) -> pd.DataFrame:
             "AU_entropy": au_ent_f, "EU_entropy": eu_ent_f, "TU_entropy": tu_ent_f,
             "sigma2_true_intrinsic": sigma2_true_intrinsic_f,
             "sigma2_true_omitted_target": sigma2_true_intrinsic_f,  # full model: no omitted-variable inflation
-            **scores_full,
             "which_model": ["full"] * nf, "source_file": [source_file] * nf,
         }))
 
