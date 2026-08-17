@@ -37,11 +37,10 @@ from utils.plotting import (
 )
 from utils.entropy_uncertainty import entropy_uncertainty_by_method
 from utils.device import get_device_for_worker, get_num_gpus
+from utils.mixture_metrics import get_dgp, normalize_mixture_arrays
+from utils.analytic_scores import score_bundle
 from utils.metrics import (
     compute_predictive_aggregation,
-    compute_gaussian_nll,
-    compute_crps_gaussian,
-    compute_true_noise_variance,
     compute_uncertainty_disentanglement
 )
 
@@ -295,7 +294,15 @@ def compute_and_save_statistics(
     nll_by_pct: dict = None,
     crps_by_pct: dict = None,
     spearman_aleatoric_by_pct: dict = None,
-    spearman_epistemic_by_pct: dict = None
+    spearman_epistemic_by_pct: dict = None,
+    oracle_crps_by_pct: dict = None,
+    oracle_nll_by_pct: dict = None,
+    iqd_by_pct: dict = None,
+    kl_by_pct: dict = None,
+    kl_mean_by_pct: dict = None,
+    kl_spread_by_pct: dict = None,
+    nll_gaussian_by_pct: dict = None,
+    crps_gaussian_by_pct: dict = None
 ):
     """
     Shared function to compute normalized statistics and save results.
@@ -451,7 +458,30 @@ def compute_and_save_statistics(
                 spearman_epistemic_list.append(np.mean(spearman_epistemic_by_pct[pct]))
             else:
                 spearman_epistemic_list.append(None)
-    
+
+    # Prepare the 8 new analytic-score metrics (oracle floors, IQD, KL decomposition,
+    # moment-matched-Gaussian secondary scores) -- each an optional dict mapping
+    # pct -> list of per-run values, mirroring nll_by_pct/crps_by_pct above.
+    def _build_metric_list(by_pct):
+        if by_pct is None:
+            return None
+        values = []
+        for pct in percentages:
+            if pct in by_pct and len(by_pct[pct]) > 0:
+                values.append(np.mean(by_pct[pct]))
+            else:
+                values.append(None)
+        return values if values else None
+
+    oracle_crps_list = _build_metric_list(oracle_crps_by_pct)
+    oracle_nll_list = _build_metric_list(oracle_nll_by_pct)
+    iqd_list = _build_metric_list(iqd_by_pct)
+    kl_list = _build_metric_list(kl_by_pct)
+    kl_mean_list = _build_metric_list(kl_mean_by_pct)
+    kl_spread_list = _build_metric_list(kl_spread_by_pct)
+    nll_gaussian_list = _build_metric_list(nll_gaussian_by_pct)
+    crps_gaussian_list = _build_metric_list(crps_gaussian_by_pct)
+
     # Save summary statistics (don't save individual files, accumulate for combined Excel)
     stats_df, fig = save_summary_statistics(
         percentages, avg_ale_norm_list, avg_epi_norm_list,
@@ -464,6 +494,14 @@ def compute_and_save_statistics(
         crps_list=crps_list if crps_list else None,
         spearman_aleatoric_list=spearman_aleatoric_list if spearman_aleatoric_list else None,
         spearman_epistemic_list=spearman_epistemic_list if spearman_epistemic_list else None,
+        oracle_crps_list=oracle_crps_list,
+        oracle_nll_list=oracle_nll_list,
+        iqd_list=iqd_list,
+        kl_list=kl_list,
+        kl_mean_list=kl_mean_list,
+        kl_spread_list=kl_spread_list,
+        nll_gaussian_list=nll_gaussian_list,
+        crps_gaussian_list=crps_gaussian_list,
         save_individual=False
     )
     
@@ -744,7 +782,15 @@ def run_mc_dropout_sample_size_experiment(
         crps_by_pct = {pct: [] for pct in percentages}
         spearman_aleatoric_by_pct = {pct: [] for pct in percentages}
         spearman_epistemic_by_pct = {pct: [] for pct in percentages}
-        
+        oracle_crps_by_pct = {pct: [] for pct in percentages}
+        oracle_nll_by_pct = {pct: [] for pct in percentages}
+        iqd_by_pct = {pct: [] for pct in percentages}
+        kl_by_pct = {pct: [] for pct in percentages}
+        kl_mean_by_pct = {pct: [] for pct in percentages}
+        kl_spread_by_pct = {pct: [] for pct in percentages}
+        nll_gaussian_by_pct = {pct: [] for pct in percentages}
+        crps_gaussian_by_pct = {pct: [] for pct in percentages}
+
         # Prepare arguments for parallel execution
         num_gpus = get_num_gpus()
         use_gpu = num_gpus > 0 and parallel
@@ -904,24 +950,44 @@ def run_mc_dropout_sample_size_experiment(
                 uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                 mse_by_pct[pct].append(mse)
                 
-                # Compute predictive aggregation (μ*, σ*²)
+                # Compute predictive aggregation (μ*, σ*²) -- still needed for the
+                # moment-matched Gaussian scores and for compute_uncertainty_disentanglement.
                 mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                
-                # Compute true noise variance for grid points
-                true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-                
-                # Compute NLL, CRPS, and disentanglement metrics
-                nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+
+                # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance
+                # (confirmed wrong for the homoscedastic case: silently returns sigma=2.0
+                # instead of the true 1.0 whenever tau isn't passed). y_grid_clean IS the
+                # true conditional mean f(x) for this DGP.
+                sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+                true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                # Analytic exact-expected CRPS/NLL against the TRUE distribution
+                # N(y_grid_clean, sigma_true^2) -- replaces the old clean-target scoring
+                # (compute_gaussian_nll/compute_crps_gaussian scored against y_grid_clean
+                # with zero variance, which broke the proper-scoring-rule guarantee).
+                mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                    mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                )
+                scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                       y_grid_clean_flat, sigma_true_flat)
+                nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                 disentangle = compute_uncertainty_disentanglement(
                     y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                 )
-                
+
                 nll_by_pct[pct].append(nll)
                 crps_by_pct[pct].append(crps)
+                oracle_crps_by_pct[pct].append(scores['oracle_crps'])
+                oracle_nll_by_pct[pct].append(scores['oracle_nll'])
+                iqd_by_pct[pct].append(scores['iqd'])
+                kl_by_pct[pct].append(scores['kl'])
+                kl_mean_by_pct[pct].append(scores['kl_mean'])
+                kl_spread_by_pct[pct].append(scores['kl_spread'])
+                nll_gaussian_by_pct[pct].append(scores['nll_gaussian'])
+                crps_gaussian_by_pct[pct].append(scores['crps_gaussian'])
                 spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
                 spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
-                
+
                 # Save raw model outputs
                 save_model_outputs(
                     mu_samples=mu_samples,
@@ -994,7 +1060,15 @@ def run_mc_dropout_sample_size_experiment(
             date=date, dropout_p=p, mc_samples=mc_samples,
             nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
             spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
-            spearman_epistemic_by_pct=spearman_epistemic_by_pct
+            spearman_epistemic_by_pct=spearman_epistemic_by_pct,
+            oracle_crps_by_pct=oracle_crps_by_pct,
+            oracle_nll_by_pct=oracle_nll_by_pct,
+            iqd_by_pct=iqd_by_pct,
+            kl_by_pct=kl_by_pct,
+            kl_mean_by_pct=kl_mean_by_pct,
+            kl_spread_by_pct=kl_spread_by_pct,
+            nll_gaussian_by_pct=nll_gaussian_by_pct,
+            crps_gaussian_by_pct=crps_gaussian_by_pct
         )
         
         # Compute and save entropy-based statistics
@@ -1098,7 +1172,15 @@ def run_deep_ensemble_sample_size_experiment(
         crps_by_pct = {pct: [] for pct in percentages}
         spearman_aleatoric_by_pct = {pct: [] for pct in percentages}
         spearman_epistemic_by_pct = {pct: [] for pct in percentages}
-        
+        oracle_crps_by_pct = {pct: [] for pct in percentages}
+        oracle_nll_by_pct = {pct: [] for pct in percentages}
+        iqd_by_pct = {pct: [] for pct in percentages}
+        kl_by_pct = {pct: [] for pct in percentages}
+        kl_mean_by_pct = {pct: [] for pct in percentages}
+        kl_spread_by_pct = {pct: [] for pct in percentages}
+        nll_gaussian_by_pct = {pct: [] for pct in percentages}
+        crps_gaussian_by_pct = {pct: [] for pct in percentages}
+
         # Prepare arguments for parallel execution
         num_gpus = get_num_gpus()
         use_gpu = num_gpus > 0 and parallel
@@ -1129,26 +1211,46 @@ def run_deep_ensemble_sample_size_experiment(
                     uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                     mse_by_pct[pct].append(mse)
                     
-                    # Compute predictive aggregation (μ*, σ*²)
+                    # Compute predictive aggregation (μ*, σ*²) -- still needed for the
+                    # moment-matched Gaussian scores and for compute_uncertainty_disentanglement.
                     mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                    
-                    # Compute true noise variance for grid points
-                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-                    
-                    # Compute NLL, CRPS, and disentanglement metrics
+
+                    # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance
+                    # (confirmed wrong for the homoscedastic case: silently returns sigma=2.0
+                    # instead of the true 1.0 whenever tau isn't passed). y_grid_clean IS the
+                    # true conditional mean f(x) for this DGP.
                     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
-                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                    sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+                    true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                    # Analytic exact-expected CRPS/NLL against the TRUE distribution
+                    # N(y_grid_clean, sigma_true^2) -- replaces the old clean-target scoring
+                    # (compute_gaussian_nll/compute_crps_gaussian scored against y_grid_clean
+                    # with zero variance, which broke the proper-scoring-rule guarantee).
+                    mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                        mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                    )
+                    scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                           y_grid_clean_flat, sigma_true_flat)
+                    nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                     disentangle = compute_uncertainty_disentanglement(
                         y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                     )
-                    
+
                     nll_by_pct[pct].append(nll)
                     crps_by_pct[pct].append(crps)
+                    oracle_crps_by_pct[pct].append(scores['oracle_crps'])
+                    oracle_nll_by_pct[pct].append(scores['oracle_nll'])
+                    iqd_by_pct[pct].append(scores['iqd'])
+                    kl_by_pct[pct].append(scores['kl'])
+                    kl_mean_by_pct[pct].append(scores['kl_mean'])
+                    kl_spread_by_pct[pct].append(scores['kl_spread'])
+                    nll_gaussian_by_pct[pct].append(scores['nll_gaussian'])
+                    crps_gaussian_by_pct[pct].append(scores['crps_gaussian'])
                     spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
                     spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
-                    
+
                     # Save raw model outputs
                     save_model_outputs(
                         mu_samples=mu_samples,
@@ -1263,24 +1365,44 @@ def run_deep_ensemble_sample_size_experiment(
                 uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                 mse_by_pct[pct].append(mse)
                 
-                # Compute predictive aggregation (μ*, σ*²)
+                # Compute predictive aggregation (μ*, σ*²) -- still needed for the
+                # moment-matched Gaussian scores and for compute_uncertainty_disentanglement.
                 mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                
-                # Compute true noise variance for grid points
-                true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-                
-                # Compute NLL, CRPS, and disentanglement metrics
-                nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+
+                # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance
+                # (confirmed wrong for the homoscedastic case: silently returns sigma=2.0
+                # instead of the true 1.0 whenever tau isn't passed). y_grid_clean IS the
+                # true conditional mean f(x) for this DGP.
+                sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+                true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                # Analytic exact-expected CRPS/NLL against the TRUE distribution
+                # N(y_grid_clean, sigma_true^2) -- replaces the old clean-target scoring
+                # (compute_gaussian_nll/compute_crps_gaussian scored against y_grid_clean
+                # with zero variance, which broke the proper-scoring-rule guarantee).
+                mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                    mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                )
+                scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                       y_grid_clean_flat, sigma_true_flat)
+                nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                 disentangle = compute_uncertainty_disentanglement(
                     y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                 )
-                
+
                 nll_by_pct[pct].append(nll)
                 crps_by_pct[pct].append(crps)
+                oracle_crps_by_pct[pct].append(scores['oracle_crps'])
+                oracle_nll_by_pct[pct].append(scores['oracle_nll'])
+                iqd_by_pct[pct].append(scores['iqd'])
+                kl_by_pct[pct].append(scores['kl'])
+                kl_mean_by_pct[pct].append(scores['kl_mean'])
+                kl_spread_by_pct[pct].append(scores['kl_spread'])
+                nll_gaussian_by_pct[pct].append(scores['nll_gaussian'])
+                crps_gaussian_by_pct[pct].append(scores['crps_gaussian'])
                 spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
                 spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
-                
+
                 # Save raw model outputs
                 save_model_outputs(
                     mu_samples=mu_samples,
@@ -1351,7 +1473,15 @@ def run_deep_ensemble_sample_size_experiment(
             date=date, n_nets=K,
             nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
             spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
-            spearman_epistemic_by_pct=spearman_epistemic_by_pct
+            spearman_epistemic_by_pct=spearman_epistemic_by_pct,
+            oracle_crps_by_pct=oracle_crps_by_pct,
+            oracle_nll_by_pct=oracle_nll_by_pct,
+            iqd_by_pct=iqd_by_pct,
+            kl_by_pct=kl_by_pct,
+            kl_mean_by_pct=kl_mean_by_pct,
+            kl_spread_by_pct=kl_spread_by_pct,
+            nll_gaussian_by_pct=nll_gaussian_by_pct,
+            crps_gaussian_by_pct=crps_gaussian_by_pct
         )
         
         # Compute and save entropy-based statistics
@@ -1458,7 +1588,15 @@ def run_bnn_sample_size_experiment(
         crps_by_pct = {pct: [] for pct in percentages}
         spearman_aleatoric_by_pct = {pct: [] for pct in percentages}
         spearman_epistemic_by_pct = {pct: [] for pct in percentages}
-        
+        oracle_crps_by_pct = {pct: [] for pct in percentages}
+        oracle_nll_by_pct = {pct: [] for pct in percentages}
+        iqd_by_pct = {pct: [] for pct in percentages}
+        kl_by_pct = {pct: [] for pct in percentages}
+        kl_mean_by_pct = {pct: [] for pct in percentages}
+        kl_spread_by_pct = {pct: [] for pct in percentages}
+        nll_gaussian_by_pct = {pct: [] for pct in percentages}
+        crps_gaussian_by_pct = {pct: [] for pct in percentages}
+
         num_gpus = get_num_gpus()
         use_gpu = num_gpus > 0 and parallel
         
@@ -1488,26 +1626,46 @@ def run_bnn_sample_size_experiment(
                     uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                     mse_by_pct[pct].append(mse)
                     
-                    # Compute predictive aggregation (μ*, σ*²)
+                    # Compute predictive aggregation (μ*, σ*²) -- still needed for the
+                    # moment-matched Gaussian scores and for compute_uncertainty_disentanglement.
                     mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                    
-                    # Compute true noise variance for grid points
-                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-                    
-                    # Compute NLL, CRPS, and disentanglement metrics
+
+                    # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance
+                    # (confirmed wrong for the homoscedastic case: silently returns sigma=2.0
+                    # instead of the true 1.0 whenever tau isn't passed). y_grid_clean IS the
+                    # true conditional mean f(x) for this DGP.
                     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
-                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                    sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+                    true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                    # Analytic exact-expected CRPS/NLL against the TRUE distribution
+                    # N(y_grid_clean, sigma_true^2) -- replaces the old clean-target scoring
+                    # (compute_gaussian_nll/compute_crps_gaussian scored against y_grid_clean
+                    # with zero variance, which broke the proper-scoring-rule guarantee).
+                    mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                        mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                    )
+                    scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                           y_grid_clean_flat, sigma_true_flat)
+                    nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                     disentangle = compute_uncertainty_disentanglement(
                         y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                     )
-                    
+
                     nll_by_pct[pct].append(nll)
                     crps_by_pct[pct].append(crps)
+                    oracle_crps_by_pct[pct].append(scores['oracle_crps'])
+                    oracle_nll_by_pct[pct].append(scores['oracle_nll'])
+                    iqd_by_pct[pct].append(scores['iqd'])
+                    kl_by_pct[pct].append(scores['kl'])
+                    kl_mean_by_pct[pct].append(scores['kl_mean'])
+                    kl_spread_by_pct[pct].append(scores['kl_spread'])
+                    nll_gaussian_by_pct[pct].append(scores['nll_gaussian'])
+                    crps_gaussian_by_pct[pct].append(scores['crps_gaussian'])
                     spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
                     spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
-                    
+
                     # Save raw model outputs
                     save_model_outputs(
                         mu_samples=mu_samples,
@@ -1623,24 +1781,44 @@ def run_bnn_sample_size_experiment(
                 uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                 mse_by_pct[pct].append(mse)
                 
-                # Compute predictive aggregation (μ*, σ*²)
+                # Compute predictive aggregation (μ*, σ*²) -- still needed for the
+                # moment-matched Gaussian scores and for compute_uncertainty_disentanglement.
                 mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                
-                # Compute true noise variance for grid points
-                true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-                
-                # Compute NLL, CRPS, and disentanglement metrics
-                nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+
+                # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance
+                # (confirmed wrong for the homoscedastic case: silently returns sigma=2.0
+                # instead of the true 1.0 whenever tau isn't passed). y_grid_clean IS the
+                # true conditional mean f(x) for this DGP.
+                sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+                true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                # Analytic exact-expected CRPS/NLL against the TRUE distribution
+                # N(y_grid_clean, sigma_true^2) -- replaces the old clean-target scoring
+                # (compute_gaussian_nll/compute_crps_gaussian scored against y_grid_clean
+                # with zero variance, which broke the proper-scoring-rule guarantee).
+                mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                    mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                )
+                scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                       y_grid_clean_flat, sigma_true_flat)
+                nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                 disentangle = compute_uncertainty_disentanglement(
                     y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                 )
-                
+
                 nll_by_pct[pct].append(nll)
                 crps_by_pct[pct].append(crps)
+                oracle_crps_by_pct[pct].append(scores['oracle_crps'])
+                oracle_nll_by_pct[pct].append(scores['oracle_nll'])
+                iqd_by_pct[pct].append(scores['iqd'])
+                kl_by_pct[pct].append(scores['kl'])
+                kl_mean_by_pct[pct].append(scores['kl_mean'])
+                kl_spread_by_pct[pct].append(scores['kl_spread'])
+                nll_gaussian_by_pct[pct].append(scores['nll_gaussian'])
+                crps_gaussian_by_pct[pct].append(scores['crps_gaussian'])
                 spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
                 spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
-                
+
                 # Save raw model outputs
                 save_model_outputs(
                     mu_samples=mu_samples,
@@ -1710,7 +1888,15 @@ def run_bnn_sample_size_experiment(
             date=date,
             nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
             spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
-            spearman_epistemic_by_pct=spearman_epistemic_by_pct
+            spearman_epistemic_by_pct=spearman_epistemic_by_pct,
+            oracle_crps_by_pct=oracle_crps_by_pct,
+            oracle_nll_by_pct=oracle_nll_by_pct,
+            iqd_by_pct=iqd_by_pct,
+            kl_by_pct=kl_by_pct,
+            kl_mean_by_pct=kl_mean_by_pct,
+            kl_spread_by_pct=kl_spread_by_pct,
+            nll_gaussian_by_pct=nll_gaussian_by_pct,
+            crps_gaussian_by_pct=crps_gaussian_by_pct
         )
         
         # Compute and save entropy-based statistics
@@ -1809,7 +1995,15 @@ def run_bamlss_sample_size_experiment(
         crps_by_pct = {pct: [] for pct in percentages}
         spearman_aleatoric_by_pct = {pct: [] for pct in percentages}
         spearman_epistemic_by_pct = {pct: [] for pct in percentages}
-        
+        oracle_crps_by_pct = {pct: [] for pct in percentages}
+        oracle_nll_by_pct = {pct: [] for pct in percentages}
+        iqd_by_pct = {pct: [] for pct in percentages}
+        kl_by_pct = {pct: [] for pct in percentages}
+        kl_mean_by_pct = {pct: [] for pct in percentages}
+        kl_spread_by_pct = {pct: [] for pct in percentages}
+        nll_gaussian_by_pct = {pct: [] for pct in percentages}
+        crps_gaussian_by_pct = {pct: [] for pct in percentages}
+
         # BAMLSS uses R, so CPU-only parallelization
         if parallel and len(percentages) > 1:
             max_workers = min(len(percentages), multiprocessing.cpu_count())
@@ -1833,26 +2027,46 @@ def run_bamlss_sample_size_experiment(
                     uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                     mse_by_pct[pct].append(mse)
                     
-                    # Compute predictive aggregation (μ*, σ*²)
+                    # Compute predictive aggregation (μ*, σ*²) -- still needed for the
+                    # moment-matched Gaussian scores and for compute_uncertainty_disentanglement.
                     mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                    
-                    # Compute true noise variance for grid points
-                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-                    
-                    # Compute NLL, CRPS, and disentanglement metrics
+
+                    # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance
+                    # (confirmed wrong for the homoscedastic case: silently returns sigma=2.0
+                    # instead of the true 1.0 whenever tau isn't passed). y_grid_clean IS the
+                    # true conditional mean f(x) for this DGP.
                     mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                     y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
-                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                    sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+                    true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                    # Analytic exact-expected CRPS/NLL against the TRUE distribution
+                    # N(y_grid_clean, sigma_true^2) -- replaces the old clean-target scoring
+                    # (compute_gaussian_nll/compute_crps_gaussian scored against y_grid_clean
+                    # with zero variance, which broke the proper-scoring-rule guarantee).
+                    mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                        mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                    )
+                    scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                           y_grid_clean_flat, sigma_true_flat)
+                    nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                     disentangle = compute_uncertainty_disentanglement(
                         y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                     )
-                    
+
                     nll_by_pct[pct].append(nll)
                     crps_by_pct[pct].append(crps)
+                    oracle_crps_by_pct[pct].append(scores['oracle_crps'])
+                    oracle_nll_by_pct[pct].append(scores['oracle_nll'])
+                    iqd_by_pct[pct].append(scores['iqd'])
+                    kl_by_pct[pct].append(scores['kl'])
+                    kl_mean_by_pct[pct].append(scores['kl_mean'])
+                    kl_spread_by_pct[pct].append(scores['kl_spread'])
+                    nll_gaussian_by_pct[pct].append(scores['nll_gaussian'])
+                    crps_gaussian_by_pct[pct].append(scores['crps_gaussian'])
                     spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
                     spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
-                    
+
                     # Save raw model outputs
                     save_model_outputs(
                         mu_samples=mu_samples,
@@ -1958,24 +2172,44 @@ def run_bamlss_sample_size_experiment(
                 uncertainties_entropy_by_pct[pct]['tot'].append(tot_entropy)
                 mse_by_pct[pct].append(mse)
                 
-                # Compute predictive aggregation (μ*, σ*²)
+                # Compute predictive aggregation (μ*, σ*²) -- still needed for the
+                # moment-matched Gaussian scores and for compute_uncertainty_disentanglement.
                 mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                
-                # Compute true noise variance for grid points
-                true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-                
-                # Compute NLL, CRPS, and disentanglement metrics
-                nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+
+                # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance
+                # (confirmed wrong for the homoscedastic case: silently returns sigma=2.0
+                # instead of the true 1.0 whenever tau isn't passed). y_grid_clean IS the
+                # true conditional mean f(x) for this DGP.
+                sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+                true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                # Analytic exact-expected CRPS/NLL against the TRUE distribution
+                # N(y_grid_clean, sigma_true^2) -- replaces the old clean-target scoring
+                # (compute_gaussian_nll/compute_crps_gaussian scored against y_grid_clean
+                # with zero variance, which broke the proper-scoring-rule guarantee).
+                mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                    mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                )
+                scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                       y_grid_clean_flat, sigma_true_flat)
+                nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                 disentangle = compute_uncertainty_disentanglement(
                     y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                 )
-                
+
                 nll_by_pct[pct].append(nll)
                 crps_by_pct[pct].append(crps)
+                oracle_crps_by_pct[pct].append(scores['oracle_crps'])
+                oracle_nll_by_pct[pct].append(scores['oracle_nll'])
+                iqd_by_pct[pct].append(scores['iqd'])
+                kl_by_pct[pct].append(scores['kl'])
+                kl_mean_by_pct[pct].append(scores['kl_mean'])
+                kl_spread_by_pct[pct].append(scores['kl_spread'])
+                nll_gaussian_by_pct[pct].append(scores['nll_gaussian'])
+                crps_gaussian_by_pct[pct].append(scores['crps_gaussian'])
                 spearman_aleatoric_by_pct[pct].append(disentangle['spearman_aleatoric'])
                 spearman_epistemic_by_pct[pct].append(disentangle['spearman_epistemic'])
-                
+
                 # Save raw model outputs
                 save_model_outputs(
                     mu_samples=mu_samples,
@@ -2045,7 +2279,15 @@ def run_bamlss_sample_size_experiment(
             date=date,
             nll_by_pct=nll_by_pct, crps_by_pct=crps_by_pct,
             spearman_aleatoric_by_pct=spearman_aleatoric_by_pct,
-            spearman_epistemic_by_pct=spearman_epistemic_by_pct
+            spearman_epistemic_by_pct=spearman_epistemic_by_pct,
+            oracle_crps_by_pct=oracle_crps_by_pct,
+            oracle_nll_by_pct=oracle_nll_by_pct,
+            iqd_by_pct=iqd_by_pct,
+            kl_by_pct=kl_by_pct,
+            kl_mean_by_pct=kl_mean_by_pct,
+            kl_spread_by_pct=kl_spread_by_pct,
+            nll_gaussian_by_pct=nll_gaussian_by_pct,
+            crps_gaussian_by_pct=crps_gaussian_by_pct
         )
         
         # Compute and save entropy-based statistics

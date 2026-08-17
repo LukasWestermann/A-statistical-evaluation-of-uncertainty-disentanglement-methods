@@ -37,6 +37,16 @@ were verified against. sigma2_true is a variance-decomposition ground truth only
 no entropy-scale ground truth is emitted (entropy AU/EU are in nats, not the
 variance/sigma^2 units sigma2_true is in, so they aren't directly comparable).
 
+Also includes, per grid point, the same analytic exact-expected-score columns the fixed
+utils/*_experiments.py call sites now use (utils.analytic_scores.score_bundle_pointwise),
+scored against the TRUE distribution N(y_true, sigma2_true) -- not the clean-target bug
+this replaced: CRPS_mixture/NLL_mixture (primary, full predictive distribution),
+CRPS_gaussian/NLL_gaussian (secondary, moment-matched single Gaussian, labeled), Oracle_CRPS/
+Oracle_NLL (exact floor under the true distribution), IQD (excess CRPS over the oracle),
+KL/KL_mean/KL_spread (excess NLL over the oracle, split into mean-shift and
+spread-mismatch components). These are recomputed fresh from mu_samples/sigma2_samples,
+same as AU/EU -- nothing scoring-related is stored raw in the npz either.
+
 One row per (npz file, grid point). Includes the seed column when present (seed-
 replication pilot) -- None/NaN for legacy single-run files that predate it, never
 fabricated. Also includes each model's saved hyperparameters (dropout_p/mc_samples
@@ -70,6 +80,8 @@ from utils.knn_entropy_regression import (  # noqa: E402
 )
 from utils.mixture_metrics import get_dgp  # noqa: E402
 from utils.entropy_uncertainty import entropy_uncertainty_by_method  # noqa: E402
+from utils.metrics import compute_predictive_aggregation  # noqa: E402
+from utils.analytic_scores import score_bundle_pointwise  # noqa: E402
 import utils.predictive_eval_io as pio  # noqa: E402
 
 ENTROPY_METHOD = "moment_matched"  # matches every run_*_experiment's default across all 5 experiments
@@ -147,6 +159,10 @@ def _row_block_for_npz(npz_path: Path, search_dir: Path, sigma_true_fn, extra_me
     func_type = _npz_scalar_str(d, "func_type")
     noise_type = _npz_scalar_str(d, "noise_type")
     sigma2_true = sigma_true_fn(x, func_type, noise_type, d)
+    sigma_true = np.sqrt(sigma2_true)
+
+    mu_star, sigma2_star = compute_predictive_aggregation(mu, sig)
+    scores = score_bundle_pointwise(mu, sig, mu_star, sigma2_star, y_true, sigma_true)
 
     n = len(x)
     row = {
@@ -172,6 +188,16 @@ def _row_block_for_npz(npz_path: Path, search_dir: Path, sigma_true_fn, extra_me
         "EU_entropy": eu_entropy,
         "TU_entropy": tu_entropy,
         "sigma2_true": sigma2_true,
+        "CRPS_mixture": np.asarray(scores["crps_mixture"]).ravel(),
+        "NLL_mixture": np.asarray(scores["nll_mixture"]).ravel(),
+        "CRPS_gaussian": np.asarray(scores["crps_gaussian"]).ravel(),
+        "NLL_gaussian": np.asarray(scores["nll_gaussian"]).ravel(),
+        "Oracle_CRPS": np.asarray(scores["oracle_crps"]).ravel(),
+        "Oracle_NLL": np.asarray(scores["oracle_nll"]).ravel(),
+        "IQD": np.asarray(scores["iqd"]).ravel(),
+        "KL": np.asarray(scores["kl"]).ravel(),
+        "KL_mean": np.asarray(scores["kl_mean"]).ravel(),
+        "KL_spread": np.asarray(scores["kl_spread"]).ravel(),
         # Path relative to search_dir, not just the bare filename -- the same
         # date+model+knob filename can legitimately recur under every DGP
         # subdirectory (noise_type/func_type aren't part of the filename itself,

@@ -29,11 +29,10 @@ from utils.plotting import (
 )
 from utils.entropy_uncertainty import entropy_uncertainty_by_method
 from utils.device import get_device_for_worker, get_num_gpus
+from utils.mixture_metrics import sigma_true_noise_level, normalize_mixture_arrays
+from utils.analytic_scores import score_bundle
 from utils.metrics import (
     compute_predictive_aggregation,
-    compute_gaussian_nll,
-    compute_crps_gaussian,
-    compute_true_noise_variance,
     compute_uncertainty_disentanglement
 )
 
@@ -359,7 +358,15 @@ def compute_and_save_statistics_noise_level(
     nll_by_tau: dict = None,
     crps_by_tau: dict = None,
     spearman_aleatoric_by_tau: dict = None,
-    spearman_epistemic_by_tau: dict = None
+    spearman_epistemic_by_tau: dict = None,
+    oracle_crps_by_tau: dict = None,
+    oracle_nll_by_tau: dict = None,
+    iqd_by_tau: dict = None,
+    kl_by_tau: dict = None,
+    kl_mean_by_tau: dict = None,
+    kl_spread_by_tau: dict = None,
+    nll_gaussian_by_tau: dict = None,
+    crps_gaussian_by_tau: dict = None
 ):
     """
     Shared function to compute normalized statistics and save results for noise level experiments.
@@ -480,7 +487,26 @@ def compute_and_save_statistics_noise_level(
     crps_list = []
     spearman_aleatoric_list = []
     spearman_epistemic_list = []
-    
+
+    def _build_list(by_tau):
+        result = []
+        if by_tau is not None:
+            for tau in tau_values:
+                if tau in by_tau:
+                    result.append(np.mean(by_tau[tau]))
+                else:
+                    result.append(None)
+        return result
+
+    oracle_crps_list = _build_list(oracle_crps_by_tau)
+    oracle_nll_list = _build_list(oracle_nll_by_tau)
+    iqd_list = _build_list(iqd_by_tau)
+    kl_list = _build_list(kl_by_tau)
+    kl_mean_list = _build_list(kl_mean_by_tau)
+    kl_spread_list = _build_list(kl_spread_by_tau)
+    nll_gaussian_list = _build_list(nll_gaussian_by_tau)
+    crps_gaussian_list = _build_list(crps_gaussian_by_tau)
+
     if nll_by_tau is not None:
         for tau in tau_values:
             if tau in nll_by_tau:
@@ -520,6 +546,14 @@ def compute_and_save_statistics_noise_level(
         crps_list=crps_list if crps_list else None,
         spearman_aleatoric_list=spearman_aleatoric_list if spearman_aleatoric_list else None,
         spearman_epistemic_list=spearman_epistemic_list if spearman_epistemic_list else None,
+        oracle_crps_list=oracle_crps_list if oracle_crps_list else None,
+        oracle_nll_list=oracle_nll_list if oracle_nll_list else None,
+        iqd_list=iqd_list if iqd_list else None,
+        kl_list=kl_list if kl_list else None,
+        kl_mean_list=kl_mean_list if kl_mean_list else None,
+        kl_spread_list=kl_spread_list if kl_spread_list else None,
+        nll_gaussian_list=nll_gaussian_list if nll_gaussian_list else None,
+        crps_gaussian_list=crps_gaussian_list if crps_gaussian_list else None,
         save_individual=False  # Don't save individual files, accumulate for combined
     )
     plt.show()
@@ -787,6 +821,14 @@ def run_mc_dropout_noise_level_experiment(
             crps_by_tau = {tau: [] for tau in tau_values}
             spearman_aleatoric_by_tau = {tau: [] for tau in tau_values}
             spearman_epistemic_by_tau = {tau: [] for tau in tau_values}
+            oracle_crps_by_tau = {tau: [] for tau in tau_values}
+            oracle_nll_by_tau = {tau: [] for tau in tau_values}
+            iqd_by_tau = {tau: [] for tau in tau_values}
+            kl_by_tau = {tau: [] for tau in tau_values}
+            kl_mean_by_tau = {tau: [] for tau in tau_values}
+            kl_spread_by_tau = {tau: [] for tau in tau_values}
+            nll_gaussian_by_tau = {tau: [] for tau in tau_values}
+            crps_gaussian_by_tau = {tau: [] for tau in tau_values}
             
             # Prepare arguments for parallel execution
             num_gpus = get_num_gpus()
@@ -845,23 +887,39 @@ def run_mc_dropout_noise_level_experiment(
                         
                         # Compute predictive aggregation (μ*, σ*²)
                         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                        
-                        # Compute true noise variance for grid points (use tau from current iteration)
-                        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
-                        
-                        # Compute NLL, CRPS, and disentanglement metrics
+
+                        # True noise sigma(x) for this tau -- sigma_true_noise_level, NOT
+                        # compute_true_noise_variance (confirmed wrong: silently overrides
+                        # sigma to a hardcoded 2.0 for homoscedastic noise when tau==2.5).
+                        sigma_true_flat = sigma_true_noise_level(x_grid, noise_type, tau).flatten()
+                        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                        # Compute NLL, CRPS, and disentanglement metrics (scored against the
+                        # TRUE noisy distribution, not the clean y_grid_clean point)
                         mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                         y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
-                        nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                        crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                        )
+                        scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                               y_grid_clean_flat, sigma_true_flat)
+                        nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                         disentangle = compute_uncertainty_disentanglement(
                             y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                         )
-                        
+
                         nll_by_tau[tau].append(nll)
                         crps_by_tau[tau].append(crps)
                         spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
                         spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                        oracle_crps_by_tau[tau].append(scores['oracle_crps'])
+                        oracle_nll_by_tau[tau].append(scores['oracle_nll'])
+                        iqd_by_tau[tau].append(scores['iqd'])
+                        kl_by_tau[tau].append(scores['kl'])
+                        kl_mean_by_tau[tau].append(scores['kl_mean'])
+                        kl_spread_by_tau[tau].append(scores['kl_spread'])
+                        nll_gaussian_by_tau[tau].append(scores['nll_gaussian'])
+                        crps_gaussian_by_tau[tau].append(scores['crps_gaussian'])
                         
                         # Save raw model outputs
                         save_model_outputs(
@@ -1034,21 +1092,37 @@ def run_mc_dropout_noise_level_experiment(
                     
                     # Compute predictive aggregation (μ*, σ*²)
                     mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                    
-                    # Compute true noise variance for grid points (use tau from current iteration)
-                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
-                    
-                    # Compute NLL, CRPS, and disentanglement metrics
-                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+
+                    # True noise sigma(x) for this tau -- sigma_true_noise_level, NOT
+                    # compute_true_noise_variance (confirmed wrong: silently overrides
+                    # sigma to a hardcoded 2.0 for homoscedastic noise when tau==2.5).
+                    sigma_true_flat = sigma_true_noise_level(x_grid, noise_type, tau).flatten()
+                    true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                    # Compute NLL, CRPS, and disentanglement metrics (scored against the
+                    # TRUE noisy distribution, not the clean y_grid_clean point)
+                    mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                        mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                    )
+                    scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                           y_grid_clean_flat, sigma_true_flat)
+                    nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                     disentangle = compute_uncertainty_disentanglement(
                         y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                     )
-                    
+
                     nll_by_tau[tau].append(nll)
                     crps_by_tau[tau].append(crps)
                     spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
                     spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                    oracle_crps_by_tau[tau].append(scores['oracle_crps'])
+                    oracle_nll_by_tau[tau].append(scores['oracle_nll'])
+                    iqd_by_tau[tau].append(scores['iqd'])
+                    kl_by_tau[tau].append(scores['kl'])
+                    kl_mean_by_tau[tau].append(scores['kl_mean'])
+                    kl_spread_by_tau[tau].append(scores['kl_spread'])
+                    nll_gaussian_by_tau[tau].append(scores['nll_gaussian'])
+                    crps_gaussian_by_tau[tau].append(scores['crps_gaussian'])
                     
                     # Save raw model outputs
                     save_model_outputs(
@@ -1170,7 +1244,11 @@ def run_mc_dropout_noise_level_experiment(
                 date=date, dropout_p=p, mc_samples=mc_samples,
                 nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
-                spearman_epistemic_by_tau=spearman_epistemic_by_tau
+                spearman_epistemic_by_tau=spearman_epistemic_by_tau,
+                oracle_crps_by_tau=oracle_crps_by_tau, oracle_nll_by_tau=oracle_nll_by_tau,
+                iqd_by_tau=iqd_by_tau, kl_by_tau=kl_by_tau,
+                kl_mean_by_tau=kl_mean_by_tau, kl_spread_by_tau=kl_spread_by_tau,
+                nll_gaussian_by_tau=nll_gaussian_by_tau, crps_gaussian_by_tau=crps_gaussian_by_tau
             )
             variance_stats_df = variance_stats_result['stats_df']
             
@@ -1267,6 +1345,14 @@ def run_deep_ensemble_noise_level_experiment(
             crps_by_tau = {tau: [] for tau in tau_values}
             spearman_aleatoric_by_tau = {tau: [] for tau in tau_values}
             spearman_epistemic_by_tau = {tau: [] for tau in tau_values}
+            oracle_crps_by_tau = {tau: [] for tau in tau_values}
+            oracle_nll_by_tau = {tau: [] for tau in tau_values}
+            iqd_by_tau = {tau: [] for tau in tau_values}
+            kl_by_tau = {tau: [] for tau in tau_values}
+            kl_mean_by_tau = {tau: [] for tau in tau_values}
+            kl_spread_by_tau = {tau: [] for tau in tau_values}
+            nll_gaussian_by_tau = {tau: [] for tau in tau_values}
+            crps_gaussian_by_tau = {tau: [] for tau in tau_values}
             
             num_gpus = get_num_gpus()
             use_gpu = num_gpus > 0 and parallel
@@ -1317,23 +1403,39 @@ def run_deep_ensemble_noise_level_experiment(
                         
                         # Compute predictive aggregation (μ*, σ*²)
                         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                        
-                        # Compute true noise variance for grid points (use tau from current iteration)
-                        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
-                        
-                        # Compute NLL, CRPS, and disentanglement metrics
+
+                        # True noise sigma(x) for this tau -- sigma_true_noise_level, NOT
+                        # compute_true_noise_variance (confirmed wrong: silently overrides
+                        # sigma to a hardcoded 2.0 for homoscedastic noise when tau==2.5).
+                        sigma_true_flat = sigma_true_noise_level(x_grid, noise_type, tau).flatten()
+                        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                        # Compute NLL, CRPS, and disentanglement metrics (scored against the
+                        # TRUE noisy distribution, not the clean y_grid_clean point)
                         mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                         y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
-                        nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                        crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                        )
+                        scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                               y_grid_clean_flat, sigma_true_flat)
+                        nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                         disentangle = compute_uncertainty_disentanglement(
                             y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                         )
-                        
+
                         nll_by_tau[tau].append(nll)
                         crps_by_tau[tau].append(crps)
                         spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
                         spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                        oracle_crps_by_tau[tau].append(scores['oracle_crps'])
+                        oracle_nll_by_tau[tau].append(scores['oracle_nll'])
+                        iqd_by_tau[tau].append(scores['iqd'])
+                        kl_by_tau[tau].append(scores['kl'])
+                        kl_mean_by_tau[tau].append(scores['kl_mean'])
+                        kl_spread_by_tau[tau].append(scores['kl_spread'])
+                        nll_gaussian_by_tau[tau].append(scores['nll_gaussian'])
+                        crps_gaussian_by_tau[tau].append(scores['crps_gaussian'])
                         
                         # Save raw model outputs
                         save_model_outputs(
@@ -1494,21 +1596,37 @@ def run_deep_ensemble_noise_level_experiment(
                     
                     # Compute predictive aggregation (μ*, σ*²)
                     mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                    
-                    # Compute true noise variance for grid points (use tau from current iteration)
-                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
-                    
-                    # Compute NLL, CRPS, and disentanglement metrics
-                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+
+                    # True noise sigma(x) for this tau -- sigma_true_noise_level, NOT
+                    # compute_true_noise_variance (confirmed wrong: silently overrides
+                    # sigma to a hardcoded 2.0 for homoscedastic noise when tau==2.5).
+                    sigma_true_flat = sigma_true_noise_level(x_grid, noise_type, tau).flatten()
+                    true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                    # Compute NLL, CRPS, and disentanglement metrics (scored against the
+                    # TRUE noisy distribution, not the clean y_grid_clean point)
+                    mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                        mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                    )
+                    scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                           y_grid_clean_flat, sigma_true_flat)
+                    nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                     disentangle = compute_uncertainty_disentanglement(
                         y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                     )
-                    
+
                     nll_by_tau[tau].append(nll)
                     crps_by_tau[tau].append(crps)
                     spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
                     spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                    oracle_crps_by_tau[tau].append(scores['oracle_crps'])
+                    oracle_nll_by_tau[tau].append(scores['oracle_nll'])
+                    iqd_by_tau[tau].append(scores['iqd'])
+                    kl_by_tau[tau].append(scores['kl'])
+                    kl_mean_by_tau[tau].append(scores['kl_mean'])
+                    kl_spread_by_tau[tau].append(scores['kl_spread'])
+                    nll_gaussian_by_tau[tau].append(scores['nll_gaussian'])
+                    crps_gaussian_by_tau[tau].append(scores['crps_gaussian'])
                     
                     # Save raw model outputs
                     save_model_outputs(
@@ -1624,7 +1742,11 @@ def run_deep_ensemble_noise_level_experiment(
                 date=date, n_nets=K,
                 nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
-                spearman_epistemic_by_tau=spearman_epistemic_by_tau
+                spearman_epistemic_by_tau=spearman_epistemic_by_tau,
+                oracle_crps_by_tau=oracle_crps_by_tau, oracle_nll_by_tau=oracle_nll_by_tau,
+                iqd_by_tau=iqd_by_tau, kl_by_tau=kl_by_tau,
+                kl_mean_by_tau=kl_mean_by_tau, kl_spread_by_tau=kl_spread_by_tau,
+                nll_gaussian_by_tau=nll_gaussian_by_tau, crps_gaussian_by_tau=crps_gaussian_by_tau
             )
             variance_stats_df = variance_stats_result['stats_df']
             
@@ -1724,6 +1846,14 @@ def run_bnn_noise_level_experiment(
             crps_by_tau = {tau: [] for tau in tau_values}
             spearman_aleatoric_by_tau = {tau: [] for tau in tau_values}
             spearman_epistemic_by_tau = {tau: [] for tau in tau_values}
+            oracle_crps_by_tau = {tau: [] for tau in tau_values}
+            oracle_nll_by_tau = {tau: [] for tau in tau_values}
+            iqd_by_tau = {tau: [] for tau in tau_values}
+            kl_by_tau = {tau: [] for tau in tau_values}
+            kl_mean_by_tau = {tau: [] for tau in tau_values}
+            kl_spread_by_tau = {tau: [] for tau in tau_values}
+            nll_gaussian_by_tau = {tau: [] for tau in tau_values}
+            crps_gaussian_by_tau = {tau: [] for tau in tau_values}
             
             num_gpus = get_num_gpus()
             use_gpu = num_gpus > 0 and parallel
@@ -1774,23 +1904,39 @@ def run_bnn_noise_level_experiment(
                         
                         # Compute predictive aggregation (μ*, σ*²)
                         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                        
-                        # Compute true noise variance for grid points (use tau from current iteration)
-                        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
-                        
-                        # Compute NLL, CRPS, and disentanglement metrics
+
+                        # True noise sigma(x) for this tau -- sigma_true_noise_level, NOT
+                        # compute_true_noise_variance (confirmed wrong: silently overrides
+                        # sigma to a hardcoded 2.0 for homoscedastic noise when tau==2.5).
+                        sigma_true_flat = sigma_true_noise_level(x_grid, noise_type, tau).flatten()
+                        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                        # Compute NLL, CRPS, and disentanglement metrics (scored against the
+                        # TRUE noisy distribution, not the clean y_grid_clean point)
                         mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                         y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
-                        nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                        crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                        )
+                        scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                               y_grid_clean_flat, sigma_true_flat)
+                        nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                         disentangle = compute_uncertainty_disentanglement(
                             y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                         )
-                        
+
                         nll_by_tau[tau].append(nll)
                         crps_by_tau[tau].append(crps)
                         spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
                         spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                        oracle_crps_by_tau[tau].append(scores['oracle_crps'])
+                        oracle_nll_by_tau[tau].append(scores['oracle_nll'])
+                        iqd_by_tau[tau].append(scores['iqd'])
+                        kl_by_tau[tau].append(scores['kl'])
+                        kl_mean_by_tau[tau].append(scores['kl_mean'])
+                        kl_spread_by_tau[tau].append(scores['kl_spread'])
+                        nll_gaussian_by_tau[tau].append(scores['nll_gaussian'])
+                        crps_gaussian_by_tau[tau].append(scores['crps_gaussian'])
                         
                         # Save raw model outputs
                         save_model_outputs(
@@ -1954,21 +2100,37 @@ def run_bnn_noise_level_experiment(
                     
                     # Compute predictive aggregation (μ*, σ*²)
                     mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                    
-                    # Compute true noise variance for grid points (use tau from current iteration)
-                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
-                    
-                    # Compute NLL, CRPS, and disentanglement metrics
-                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+
+                    # True noise sigma(x) for this tau -- sigma_true_noise_level, NOT
+                    # compute_true_noise_variance (confirmed wrong: silently overrides
+                    # sigma to a hardcoded 2.0 for homoscedastic noise when tau==2.5).
+                    sigma_true_flat = sigma_true_noise_level(x_grid, noise_type, tau).flatten()
+                    true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                    # Compute NLL, CRPS, and disentanglement metrics (scored against the
+                    # TRUE noisy distribution, not the clean y_grid_clean point)
+                    mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                        mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                    )
+                    scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                           y_grid_clean_flat, sigma_true_flat)
+                    nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                     disentangle = compute_uncertainty_disentanglement(
                         y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                     )
-                    
+
                     nll_by_tau[tau].append(nll)
                     crps_by_tau[tau].append(crps)
                     spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
                     spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                    oracle_crps_by_tau[tau].append(scores['oracle_crps'])
+                    oracle_nll_by_tau[tau].append(scores['oracle_nll'])
+                    iqd_by_tau[tau].append(scores['iqd'])
+                    kl_by_tau[tau].append(scores['kl'])
+                    kl_mean_by_tau[tau].append(scores['kl_mean'])
+                    kl_spread_by_tau[tau].append(scores['kl_spread'])
+                    nll_gaussian_by_tau[tau].append(scores['nll_gaussian'])
+                    crps_gaussian_by_tau[tau].append(scores['crps_gaussian'])
                     
                     # Save raw model outputs
                     save_model_outputs(
@@ -2083,7 +2245,11 @@ def run_bnn_noise_level_experiment(
                 date=date,
                 nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
-                spearman_epistemic_by_tau=spearman_epistemic_by_tau
+                spearman_epistemic_by_tau=spearman_epistemic_by_tau,
+                oracle_crps_by_tau=oracle_crps_by_tau, oracle_nll_by_tau=oracle_nll_by_tau,
+                iqd_by_tau=iqd_by_tau, kl_by_tau=kl_by_tau,
+                kl_mean_by_tau=kl_mean_by_tau, kl_spread_by_tau=kl_spread_by_tau,
+                nll_gaussian_by_tau=nll_gaussian_by_tau, crps_gaussian_by_tau=crps_gaussian_by_tau
             )
             variance_stats_df = variance_stats_result['stats_df']
             
@@ -2175,6 +2341,14 @@ def run_bamlss_noise_level_experiment(
             crps_by_tau = {tau: [] for tau in tau_values}
             spearman_aleatoric_by_tau = {tau: [] for tau in tau_values}
             spearman_epistemic_by_tau = {tau: [] for tau in tau_values}
+            oracle_crps_by_tau = {tau: [] for tau in tau_values}
+            oracle_nll_by_tau = {tau: [] for tau in tau_values}
+            iqd_by_tau = {tau: [] for tau in tau_values}
+            kl_by_tau = {tau: [] for tau in tau_values}
+            kl_mean_by_tau = {tau: [] for tau in tau_values}
+            kl_spread_by_tau = {tau: [] for tau in tau_values}
+            nll_gaussian_by_tau = {tau: [] for tau in tau_values}
+            crps_gaussian_by_tau = {tau: [] for tau in tau_values}
             
             # BAMLSS uses R, so CPU-only parallelization
             total_tasks = len(tau_values)
@@ -2220,23 +2394,39 @@ def run_bamlss_noise_level_experiment(
                         
                         # Compute predictive aggregation (μ*, σ*²)
                         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                        
-                        # Compute true noise variance for grid points (use tau from current iteration)
-                        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
-                        
-                        # Compute NLL, CRPS, and disentanglement metrics
+
+                        # True noise sigma(x) for this tau -- sigma_true_noise_level, NOT
+                        # compute_true_noise_variance (confirmed wrong: silently overrides
+                        # sigma to a hardcoded 2.0 for homoscedastic noise when tau==2.5).
+                        sigma_true_flat = sigma_true_noise_level(x_grid, noise_type, tau).flatten()
+                        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                        # Compute NLL, CRPS, and disentanglement metrics (scored against the
+                        # TRUE noisy distribution, not the clean y_grid_clean point)
                         mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
                         y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
-                        nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                        crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+                        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                        )
+                        scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                               y_grid_clean_flat, sigma_true_flat)
+                        nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                         disentangle = compute_uncertainty_disentanglement(
                             y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                         )
-                        
+
                         nll_by_tau[tau].append(nll)
                         crps_by_tau[tau].append(crps)
                         spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
                         spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                        oracle_crps_by_tau[tau].append(scores['oracle_crps'])
+                        oracle_nll_by_tau[tau].append(scores['oracle_nll'])
+                        iqd_by_tau[tau].append(scores['iqd'])
+                        kl_by_tau[tau].append(scores['kl'])
+                        kl_mean_by_tau[tau].append(scores['kl_mean'])
+                        kl_spread_by_tau[tau].append(scores['kl_spread'])
+                        nll_gaussian_by_tau[tau].append(scores['nll_gaussian'])
+                        crps_gaussian_by_tau[tau].append(scores['crps_gaussian'])
                         
                         # Save raw model outputs
                         save_model_outputs(
@@ -2390,21 +2580,37 @@ def run_bamlss_noise_level_experiment(
                     
                     # Compute predictive aggregation (μ*, σ*²)
                     mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-                    
-                    # Compute true noise variance for grid points (use tau from current iteration)
-                    true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type, tau=tau)
-                    
-                    # Compute NLL, CRPS, and disentanglement metrics
-                    nll = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-                    crps = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
+
+                    # True noise sigma(x) for this tau -- sigma_true_noise_level, NOT
+                    # compute_true_noise_variance (confirmed wrong: silently overrides
+                    # sigma to a hardcoded 2.0 for homoscedastic noise when tau==2.5).
+                    sigma_true_flat = sigma_true_noise_level(x_grid, noise_type, tau).flatten()
+                    true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement
+
+                    # Compute NLL, CRPS, and disentanglement metrics (scored against the
+                    # TRUE noisy distribution, not the clean y_grid_clean point)
+                    mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+                        mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+                    )
+                    scores = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                           y_grid_clean_flat, sigma_true_flat)
+                    nll, crps = scores['nll_mixture'], scores['crps_mixture']  # PRIMARY = mixture scores
                     disentangle = compute_uncertainty_disentanglement(
                         y_grid_clean_flat, mu_star, ale_var, epi_var, true_noise_var
                     )
-                    
+
                     nll_by_tau[tau].append(nll)
                     crps_by_tau[tau].append(crps)
                     spearman_aleatoric_by_tau[tau].append(disentangle['spearman_aleatoric'])
                     spearman_epistemic_by_tau[tau].append(disentangle['spearman_epistemic'])
+                    oracle_crps_by_tau[tau].append(scores['oracle_crps'])
+                    oracle_nll_by_tau[tau].append(scores['oracle_nll'])
+                    iqd_by_tau[tau].append(scores['iqd'])
+                    kl_by_tau[tau].append(scores['kl'])
+                    kl_mean_by_tau[tau].append(scores['kl_mean'])
+                    kl_spread_by_tau[tau].append(scores['kl_spread'])
+                    nll_gaussian_by_tau[tau].append(scores['nll_gaussian'])
+                    crps_gaussian_by_tau[tau].append(scores['crps_gaussian'])
                     
                     # Save raw model outputs
                     save_model_outputs(
@@ -2519,7 +2725,11 @@ def run_bamlss_noise_level_experiment(
                 date=date,
                 nll_by_tau=nll_by_tau, crps_by_tau=crps_by_tau,
                 spearman_aleatoric_by_tau=spearman_aleatoric_by_tau,
-                spearman_epistemic_by_tau=spearman_epistemic_by_tau
+                spearman_epistemic_by_tau=spearman_epistemic_by_tau,
+                oracle_crps_by_tau=oracle_crps_by_tau, oracle_nll_by_tau=oracle_nll_by_tau,
+                iqd_by_tau=iqd_by_tau, kl_by_tau=kl_by_tau,
+                kl_mean_by_tau=kl_mean_by_tau, kl_spread_by_tau=kl_spread_by_tau,
+                nll_gaussian_by_tau=nll_gaussian_by_tau, crps_gaussian_by_tau=crps_gaussian_by_tau
             )
             variance_stats_df = variance_stats_result['stats_df']
             

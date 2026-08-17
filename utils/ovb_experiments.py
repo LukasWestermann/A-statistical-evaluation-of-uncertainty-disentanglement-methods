@@ -27,6 +27,9 @@ from pathlib import Path
 from utils.entropy_uncertainty import entropy_uncertainty_by_method
 from utils.results_save import sanitize_filename
 from utils.device import get_device_for_worker, get_num_gpus
+from utils.metrics import compute_predictive_aggregation
+from utils.mixture_metrics import get_dgp, normalize_mixture_arrays
+from utils.analytic_scores import score_bundle
 from utils.plotting import (
     plot_uncertainties_no_ood,
     plot_uncertainties_no_ood_normalized,
@@ -556,6 +559,34 @@ def run_mc_dropout_ovb_rho_experiment(
         mu_pred_full_flat = mu_pred_full.squeeze()
         Y_flat = Y.squeeze()
         mse_full = np.mean((mu_pred_full_flat - Y_flat)**2)
+
+        # --- Analytic exact-expected CRPS/NLL against the known true distribution (new
+        # capability, OVB had none before). Omitted model's true target variance is inflated
+        # by the omitted-variable term; full model's is not. See utils/analytic_scores.py
+        # docstring for why these are exact expectations, not Monte-Carlo estimates against a
+        # fixed test set.
+        sigma_fn = get_dgp(func_type, noise_type).sigma_fn
+        mean_fn = get_dgp(func_type, noise_type).mean_fn
+
+        mu_true_omitted = np.asarray(y_grid_clean).squeeze()
+        sigma_intrinsic_grid = sigma_fn(np.asarray(x_grid).squeeze())
+        sigma_true_omitted = np.sqrt(sigma_intrinsic_grid ** 2 + (beta2 ** 2) * (1.0 - rho ** 2))
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(mu_true_omitted)
+        )
+        mu_star_om, sigma2_star_om = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        scores_omitted = score_bundle(mu_samples_n, sigma2_samples_n, mu_star_om, sigma2_star_om,
+                                       mu_true_omitted, sigma_true_omitted)
+
+        x_full_flat = np.asarray(X).squeeze()
+        mu_true_full = mean_fn(x_full_flat)
+        sigma_true_full = sigma_fn(x_full_flat)
+        mu_samples_full_n, sigma2_samples_full_n = normalize_mixture_arrays(
+            mu_samples_full, sigma2_samples_full, n_expected=len(x_full_flat)
+        )
+        mu_star_full, sigma2_star_full = compute_predictive_aggregation(mu_samples_full, sigma2_samples_full)
+        scores_full = score_bundle(mu_samples_full_n, sigma2_samples_full_n, mu_star_full, sigma2_star_full,
+                                    mu_true_full, sigma_true_full)
         
         # =====================================================================
         # Evaluate full model on 2D grid for heatmap visualization
@@ -659,6 +690,28 @@ def run_mc_dropout_ovb_rho_experiment(
             'mean_tot_entropy_norm': np.mean(tot_entropy_norm),
             # Full model - MSE
             'mse_full': mse_full,
+            # Analytic exact-expected CRPS/NLL (omitted model)
+            'crps_mixture': scores_omitted['crps_mixture'],
+            'nll_mixture': scores_omitted['nll_mixture'],
+            'crps_gaussian': scores_omitted['crps_gaussian'],
+            'nll_gaussian': scores_omitted['nll_gaussian'],
+            'oracle_crps': scores_omitted['oracle_crps'],
+            'oracle_nll': scores_omitted['oracle_nll'],
+            'iqd': scores_omitted['iqd'],
+            'kl': scores_omitted['kl'],
+            'kl_mean': scores_omitted['kl_mean'],          # flagship OVB diagnostic
+            'kl_spread': scores_omitted['kl_spread'],       # flagship OVB diagnostic
+            # Analytic exact-expected CRPS/NLL (full model)
+            'crps_mixture_full': scores_full['crps_mixture'],
+            'nll_mixture_full': scores_full['nll_mixture'],
+            'crps_gaussian_full': scores_full['crps_gaussian'],
+            'nll_gaussian_full': scores_full['nll_gaussian'],
+            'oracle_crps_full': scores_full['oracle_crps'],
+            'oracle_nll_full': scores_full['oracle_nll'],
+            'iqd_full': scores_full['iqd'],
+            'kl_full': scores_full['kl'],
+            'kl_mean_full': scores_full['kl_mean'],
+            'kl_spread_full': scores_full['kl_spread'],
             # Full model - Variance decomposition (raw)
             'mean_ale_var_full': mean_ale_var_full,
             'mean_epi_var_full': mean_epi_var_full,
@@ -949,6 +1002,34 @@ def run_mc_dropout_ovb_beta2_experiment(
         mu_pred_full_flat = mu_pred_full.squeeze()
         Y_flat = Y.squeeze()
         mse_full = np.mean((mu_pred_full_flat - Y_flat)**2)
+
+        # --- Analytic exact-expected CRPS/NLL against the known true distribution (new
+        # capability, OVB had none before). Omitted model's true target variance is inflated
+        # by the omitted-variable term; full model's is not. See utils/analytic_scores.py
+        # docstring for why these are exact expectations, not Monte-Carlo estimates against a
+        # fixed test set.
+        sigma_fn = get_dgp(func_type, noise_type).sigma_fn
+        mean_fn = get_dgp(func_type, noise_type).mean_fn
+
+        mu_true_omitted = np.asarray(y_grid_clean).squeeze()
+        sigma_intrinsic_grid = sigma_fn(np.asarray(x_grid).squeeze())
+        sigma_true_omitted = np.sqrt(sigma_intrinsic_grid ** 2 + (beta2_val ** 2) * (1.0 - rho ** 2))
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(mu_true_omitted)
+        )
+        mu_star_om, sigma2_star_om = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        scores_omitted = score_bundle(mu_samples_n, sigma2_samples_n, mu_star_om, sigma2_star_om,
+                                       mu_true_omitted, sigma_true_omitted)
+
+        x_full_flat = np.asarray(X).squeeze()
+        mu_true_full = mean_fn(x_full_flat)
+        sigma_true_full = sigma_fn(x_full_flat)
+        mu_samples_full_n, sigma2_samples_full_n = normalize_mixture_arrays(
+            mu_samples_full, sigma2_samples_full, n_expected=len(x_full_flat)
+        )
+        mu_star_full, sigma2_star_full = compute_predictive_aggregation(mu_samples_full, sigma2_samples_full)
+        scores_full = score_bundle(mu_samples_full_n, sigma2_samples_full_n, mu_star_full, sigma2_star_full,
+                                    mu_true_full, sigma_true_full)
         
         # =====================================================================
         # Evaluate full model on 2D grid for heatmap visualization
@@ -1052,6 +1133,28 @@ def run_mc_dropout_ovb_beta2_experiment(
             'mean_tot_entropy_norm': np.mean(tot_entropy_norm),
             # Full model - MSE
             'mse_full': mse_full,
+            # Analytic exact-expected CRPS/NLL (omitted model)
+            'crps_mixture': scores_omitted['crps_mixture'],
+            'nll_mixture': scores_omitted['nll_mixture'],
+            'crps_gaussian': scores_omitted['crps_gaussian'],
+            'nll_gaussian': scores_omitted['nll_gaussian'],
+            'oracle_crps': scores_omitted['oracle_crps'],
+            'oracle_nll': scores_omitted['oracle_nll'],
+            'iqd': scores_omitted['iqd'],
+            'kl': scores_omitted['kl'],
+            'kl_mean': scores_omitted['kl_mean'],          # flagship OVB diagnostic
+            'kl_spread': scores_omitted['kl_spread'],       # flagship OVB diagnostic
+            # Analytic exact-expected CRPS/NLL (full model)
+            'crps_mixture_full': scores_full['crps_mixture'],
+            'nll_mixture_full': scores_full['nll_mixture'],
+            'crps_gaussian_full': scores_full['crps_gaussian'],
+            'nll_gaussian_full': scores_full['nll_gaussian'],
+            'oracle_crps_full': scores_full['oracle_crps'],
+            'oracle_nll_full': scores_full['oracle_nll'],
+            'iqd_full': scores_full['iqd'],
+            'kl_full': scores_full['kl'],
+            'kl_mean_full': scores_full['kl_mean'],
+            'kl_spread_full': scores_full['kl_spread'],
             # Full model - Variance decomposition (raw)
             'mean_ale_var_full': mean_ale_var_full,
             'mean_epi_var_full': mean_epi_var_full,
@@ -1303,6 +1406,34 @@ def run_deep_ensemble_ovb_rho_experiment(
         
         # MSE for full model
         mse_full = np.mean((mu_pred_full.squeeze() - Y.squeeze())**2)
+
+        # --- Analytic exact-expected CRPS/NLL against the known true distribution (new
+        # capability, OVB had none before). Omitted model's true target variance is inflated
+        # by the omitted-variable term; full model's is not. See utils/analytic_scores.py
+        # docstring for why these are exact expectations, not Monte-Carlo estimates against a
+        # fixed test set.
+        sigma_fn = get_dgp(func_type, noise_type).sigma_fn
+        mean_fn = get_dgp(func_type, noise_type).mean_fn
+
+        mu_true_omitted = np.asarray(y_grid_clean).squeeze()
+        sigma_intrinsic_grid = sigma_fn(np.asarray(x_grid).squeeze())
+        sigma_true_omitted = np.sqrt(sigma_intrinsic_grid ** 2 + (beta2 ** 2) * (1.0 - rho ** 2))
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(mu_true_omitted)
+        )
+        mu_star_om, sigma2_star_om = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        scores_omitted = score_bundle(mu_samples_n, sigma2_samples_n, mu_star_om, sigma2_star_om,
+                                       mu_true_omitted, sigma_true_omitted)
+
+        x_full_flat = np.asarray(X).squeeze()
+        mu_true_full = mean_fn(x_full_flat)
+        sigma_true_full = sigma_fn(x_full_flat)
+        mu_samples_full_n, sigma2_samples_full_n = normalize_mixture_arrays(
+            mu_samples_full, sigma2_samples_full, n_expected=len(x_full_flat)
+        )
+        mu_star_full, sigma2_star_full = compute_predictive_aggregation(mu_samples_full, sigma2_samples_full)
+        scores_full = score_bundle(mu_samples_full_n, sigma2_samples_full_n, mu_star_full, sigma2_star_full,
+                                    mu_true_full, sigma_true_full)
         
         # 2D grid evaluation for heatmaps
         heatmap_grid_points = 50
@@ -1361,6 +1492,16 @@ def run_deep_ensemble_ovb_rho_experiment(
         summary_rows.append({
             'rho': rho, 'beta2': beta2, 'empirical_corr': empirical_corr,
             'mse': mse, 'mse_full': mse_full,
+            'crps_mixture': scores_omitted['crps_mixture'], 'nll_mixture': scores_omitted['nll_mixture'],
+            'crps_gaussian': scores_omitted['crps_gaussian'], 'nll_gaussian': scores_omitted['nll_gaussian'],
+            'oracle_crps': scores_omitted['oracle_crps'], 'oracle_nll': scores_omitted['oracle_nll'],
+            'iqd': scores_omitted['iqd'], 'kl': scores_omitted['kl'],
+            'kl_mean': scores_omitted['kl_mean'], 'kl_spread': scores_omitted['kl_spread'],  # flagship OVB diagnostics
+            'crps_mixture_full': scores_full['crps_mixture'], 'nll_mixture_full': scores_full['nll_mixture'],
+            'crps_gaussian_full': scores_full['crps_gaussian'], 'nll_gaussian_full': scores_full['nll_gaussian'],
+            'oracle_crps_full': scores_full['oracle_crps'], 'oracle_nll_full': scores_full['oracle_nll'],
+            'iqd_full': scores_full['iqd'], 'kl_full': scores_full['kl'],
+            'kl_mean_full': scores_full['kl_mean'], 'kl_spread_full': scores_full['kl_spread'],
             'mean_ale_var': np.mean(ale_var), 'mean_epi_var': np.mean(epi_var), 'mean_tot_var': np.mean(tot_var),
             'mean_ale_var_norm': np.mean(ale_var_norm), 'mean_epi_var_norm': np.mean(epi_var_norm), 'mean_tot_var_norm': np.mean(tot_var_norm),
             'au_eu_corr_var': np.corrcoef(ale_var.flatten(), epi_var.flatten())[0, 1],
@@ -1528,6 +1669,34 @@ def run_deep_ensemble_ovb_beta2_experiment(
         tot_entropy_full = entropy_results_full['total']
         
         mse_full = np.mean((mu_pred_full.squeeze() - Y.squeeze())**2)
+
+        # --- Analytic exact-expected CRPS/NLL against the known true distribution (new
+        # capability, OVB had none before). Omitted model's true target variance is inflated
+        # by the omitted-variable term; full model's is not. See utils/analytic_scores.py
+        # docstring for why these are exact expectations, not Monte-Carlo estimates against a
+        # fixed test set.
+        sigma_fn = get_dgp(func_type, noise_type).sigma_fn
+        mean_fn = get_dgp(func_type, noise_type).mean_fn
+
+        mu_true_omitted = np.asarray(y_grid_clean).squeeze()
+        sigma_intrinsic_grid = sigma_fn(np.asarray(x_grid).squeeze())
+        sigma_true_omitted = np.sqrt(sigma_intrinsic_grid ** 2 + (beta2_val ** 2) * (1.0 - rho ** 2))
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(mu_true_omitted)
+        )
+        mu_star_om, sigma2_star_om = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        scores_omitted = score_bundle(mu_samples_n, sigma2_samples_n, mu_star_om, sigma2_star_om,
+                                       mu_true_omitted, sigma_true_omitted)
+
+        x_full_flat = np.asarray(X).squeeze()
+        mu_true_full = mean_fn(x_full_flat)
+        sigma_true_full = sigma_fn(x_full_flat)
+        mu_samples_full_n, sigma2_samples_full_n = normalize_mixture_arrays(
+            mu_samples_full, sigma2_samples_full, n_expected=len(x_full_flat)
+        )
+        mu_star_full, sigma2_star_full = compute_predictive_aggregation(mu_samples_full, sigma2_samples_full)
+        scores_full = score_bundle(mu_samples_full_n, sigma2_samples_full_n, mu_star_full, sigma2_star_full,
+                                    mu_true_full, sigma_true_full)
         
         # 2D grid
         heatmap_grid_points = 50
@@ -1582,6 +1751,16 @@ def run_deep_ensemble_ovb_beta2_experiment(
         summary_rows.append({
             'rho': rho, 'beta2': beta2_val, 'empirical_corr': empirical_corr,
             'mse': mse, 'mse_full': mse_full,
+            'crps_mixture': scores_omitted['crps_mixture'], 'nll_mixture': scores_omitted['nll_mixture'],
+            'crps_gaussian': scores_omitted['crps_gaussian'], 'nll_gaussian': scores_omitted['nll_gaussian'],
+            'oracle_crps': scores_omitted['oracle_crps'], 'oracle_nll': scores_omitted['oracle_nll'],
+            'iqd': scores_omitted['iqd'], 'kl': scores_omitted['kl'],
+            'kl_mean': scores_omitted['kl_mean'], 'kl_spread': scores_omitted['kl_spread'],  # flagship OVB diagnostics
+            'crps_mixture_full': scores_full['crps_mixture'], 'nll_mixture_full': scores_full['nll_mixture'],
+            'crps_gaussian_full': scores_full['crps_gaussian'], 'nll_gaussian_full': scores_full['nll_gaussian'],
+            'oracle_crps_full': scores_full['oracle_crps'], 'oracle_nll_full': scores_full['oracle_nll'],
+            'iqd_full': scores_full['iqd'], 'kl_full': scores_full['kl'],
+            'kl_mean_full': scores_full['kl_mean'], 'kl_spread_full': scores_full['kl_spread'],
             'mean_ale_var': np.mean(ale_var), 'mean_epi_var': np.mean(epi_var), 'mean_tot_var': np.mean(tot_var),
             'mean_ale_var_norm': np.mean(ale_var_norm), 'mean_epi_var_norm': np.mean(epi_var_norm), 'mean_tot_var_norm': np.mean(tot_var_norm),
             'au_eu_corr_var': np.corrcoef(ale_var.flatten(), epi_var.flatten())[0, 1],
@@ -1753,6 +1932,34 @@ def run_bnn_ovb_rho_experiment(
         tot_entropy_full = entropy_results_full['total']
         
         mse_full = np.mean((mu_pred_full.squeeze() - Y.squeeze())**2)
+
+        # --- Analytic exact-expected CRPS/NLL against the known true distribution (new
+        # capability, OVB had none before). Omitted model's true target variance is inflated
+        # by the omitted-variable term; full model's is not. See utils/analytic_scores.py
+        # docstring for why these are exact expectations, not Monte-Carlo estimates against a
+        # fixed test set.
+        sigma_fn = get_dgp(func_type, noise_type).sigma_fn
+        mean_fn = get_dgp(func_type, noise_type).mean_fn
+
+        mu_true_omitted = np.asarray(y_grid_clean).squeeze()
+        sigma_intrinsic_grid = sigma_fn(np.asarray(x_grid).squeeze())
+        sigma_true_omitted = np.sqrt(sigma_intrinsic_grid ** 2 + (beta2 ** 2) * (1.0 - rho ** 2))
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(mu_true_omitted)
+        )
+        mu_star_om, sigma2_star_om = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        scores_omitted = score_bundle(mu_samples_n, sigma2_samples_n, mu_star_om, sigma2_star_om,
+                                       mu_true_omitted, sigma_true_omitted)
+
+        x_full_flat = np.asarray(X).squeeze()
+        mu_true_full = mean_fn(x_full_flat)
+        sigma_true_full = sigma_fn(x_full_flat)
+        mu_samples_full_n, sigma2_samples_full_n = normalize_mixture_arrays(
+            mu_samples_full, sigma2_samples_full, n_expected=len(x_full_flat)
+        )
+        mu_star_full, sigma2_star_full = compute_predictive_aggregation(mu_samples_full, sigma2_samples_full)
+        scores_full = score_bundle(mu_samples_full_n, sigma2_samples_full_n, mu_star_full, sigma2_star_full,
+                                    mu_true_full, sigma_true_full)
         
         # 2D grid evaluation
         heatmap_grid_points = 50
@@ -1809,6 +2016,16 @@ def run_bnn_ovb_rho_experiment(
         summary_rows.append({
             'rho': rho, 'beta2': beta2, 'empirical_corr': empirical_corr,
             'mse': mse, 'mse_full': mse_full,
+            'crps_mixture': scores_omitted['crps_mixture'], 'nll_mixture': scores_omitted['nll_mixture'],
+            'crps_gaussian': scores_omitted['crps_gaussian'], 'nll_gaussian': scores_omitted['nll_gaussian'],
+            'oracle_crps': scores_omitted['oracle_crps'], 'oracle_nll': scores_omitted['oracle_nll'],
+            'iqd': scores_omitted['iqd'], 'kl': scores_omitted['kl'],
+            'kl_mean': scores_omitted['kl_mean'], 'kl_spread': scores_omitted['kl_spread'],  # flagship OVB diagnostics
+            'crps_mixture_full': scores_full['crps_mixture'], 'nll_mixture_full': scores_full['nll_mixture'],
+            'crps_gaussian_full': scores_full['crps_gaussian'], 'nll_gaussian_full': scores_full['nll_gaussian'],
+            'oracle_crps_full': scores_full['oracle_crps'], 'oracle_nll_full': scores_full['oracle_nll'],
+            'iqd_full': scores_full['iqd'], 'kl_full': scores_full['kl'],
+            'kl_mean_full': scores_full['kl_mean'], 'kl_spread_full': scores_full['kl_spread'],
             'mean_ale_var': np.mean(ale_var), 'mean_epi_var': np.mean(epi_var), 'mean_tot_var': np.mean(tot_var),
             'mean_ale_var_norm': np.mean(ale_var_norm), 'mean_epi_var_norm': np.mean(epi_var_norm), 'mean_tot_var_norm': np.mean(tot_var_norm),
             'au_eu_corr_var': np.corrcoef(ale_var.flatten(), epi_var.flatten())[0, 1],
@@ -1978,6 +2195,34 @@ def run_bnn_ovb_beta2_experiment(
         tot_entropy_full = entropy_results_full['total']
         
         mse_full = np.mean((mu_pred_full.squeeze() - Y.squeeze())**2)
+
+        # --- Analytic exact-expected CRPS/NLL against the known true distribution (new
+        # capability, OVB had none before). Omitted model's true target variance is inflated
+        # by the omitted-variable term; full model's is not. See utils/analytic_scores.py
+        # docstring for why these are exact expectations, not Monte-Carlo estimates against a
+        # fixed test set.
+        sigma_fn = get_dgp(func_type, noise_type).sigma_fn
+        mean_fn = get_dgp(func_type, noise_type).mean_fn
+
+        mu_true_omitted = np.asarray(y_grid_clean).squeeze()
+        sigma_intrinsic_grid = sigma_fn(np.asarray(x_grid).squeeze())
+        sigma_true_omitted = np.sqrt(sigma_intrinsic_grid ** 2 + (beta2_val ** 2) * (1.0 - rho ** 2))
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(mu_true_omitted)
+        )
+        mu_star_om, sigma2_star_om = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        scores_omitted = score_bundle(mu_samples_n, sigma2_samples_n, mu_star_om, sigma2_star_om,
+                                       mu_true_omitted, sigma_true_omitted)
+
+        x_full_flat = np.asarray(X).squeeze()
+        mu_true_full = mean_fn(x_full_flat)
+        sigma_true_full = sigma_fn(x_full_flat)
+        mu_samples_full_n, sigma2_samples_full_n = normalize_mixture_arrays(
+            mu_samples_full, sigma2_samples_full, n_expected=len(x_full_flat)
+        )
+        mu_star_full, sigma2_star_full = compute_predictive_aggregation(mu_samples_full, sigma2_samples_full)
+        scores_full = score_bundle(mu_samples_full_n, sigma2_samples_full_n, mu_star_full, sigma2_star_full,
+                                    mu_true_full, sigma_true_full)
         
         # 2D grid
         heatmap_grid_points = 50
@@ -2033,6 +2278,16 @@ def run_bnn_ovb_beta2_experiment(
         summary_rows.append({
             'rho': rho, 'beta2': beta2_val, 'empirical_corr': empirical_corr,
             'mse': mse, 'mse_full': mse_full,
+            'crps_mixture': scores_omitted['crps_mixture'], 'nll_mixture': scores_omitted['nll_mixture'],
+            'crps_gaussian': scores_omitted['crps_gaussian'], 'nll_gaussian': scores_omitted['nll_gaussian'],
+            'oracle_crps': scores_omitted['oracle_crps'], 'oracle_nll': scores_omitted['oracle_nll'],
+            'iqd': scores_omitted['iqd'], 'kl': scores_omitted['kl'],
+            'kl_mean': scores_omitted['kl_mean'], 'kl_spread': scores_omitted['kl_spread'],  # flagship OVB diagnostics
+            'crps_mixture_full': scores_full['crps_mixture'], 'nll_mixture_full': scores_full['nll_mixture'],
+            'crps_gaussian_full': scores_full['crps_gaussian'], 'nll_gaussian_full': scores_full['nll_gaussian'],
+            'oracle_crps_full': scores_full['oracle_crps'], 'oracle_nll_full': scores_full['oracle_nll'],
+            'iqd_full': scores_full['iqd'], 'kl_full': scores_full['kl'],
+            'kl_mean_full': scores_full['kl_mean'], 'kl_spread_full': scores_full['kl_spread'],
             'mean_ale_var': np.mean(ale_var), 'mean_epi_var': np.mean(epi_var), 'mean_tot_var': np.mean(tot_var),
             'mean_ale_var_norm': np.mean(ale_var_norm), 'mean_epi_var_norm': np.mean(epi_var_norm), 'mean_tot_var_norm': np.mean(tot_var_norm),
             'au_eu_corr_var': np.corrcoef(ale_var.flatten(), epi_var.flatten())[0, 1],
@@ -2195,6 +2450,34 @@ def run_bamlss_ovb_rho_experiment(
         tot_entropy_full = entropy_results_full['total']
         
         mse_full = np.mean((mu_pred_full.squeeze() - Y.squeeze())**2)
+
+        # --- Analytic exact-expected CRPS/NLL against the known true distribution (new
+        # capability, OVB had none before). Omitted model's true target variance is inflated
+        # by the omitted-variable term; full model's is not. See utils/analytic_scores.py
+        # docstring for why these are exact expectations, not Monte-Carlo estimates against a
+        # fixed test set.
+        sigma_fn = get_dgp(func_type, noise_type).sigma_fn
+        mean_fn = get_dgp(func_type, noise_type).mean_fn
+
+        mu_true_omitted = np.asarray(y_grid_clean).squeeze()
+        sigma_intrinsic_grid = sigma_fn(np.asarray(x_grid).squeeze())
+        sigma_true_omitted = np.sqrt(sigma_intrinsic_grid ** 2 + (beta2 ** 2) * (1.0 - rho ** 2))
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(mu_true_omitted)
+        )
+        mu_star_om, sigma2_star_om = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        scores_omitted = score_bundle(mu_samples_n, sigma2_samples_n, mu_star_om, sigma2_star_om,
+                                       mu_true_omitted, sigma_true_omitted)
+
+        x_full_flat = np.asarray(X).squeeze()
+        mu_true_full = mean_fn(x_full_flat)
+        sigma_true_full = sigma_fn(x_full_flat)
+        mu_samples_full_n, sigma2_samples_full_n = normalize_mixture_arrays(
+            mu_samples_full, sigma2_samples_full, n_expected=len(x_full_flat)
+        )
+        mu_star_full, sigma2_star_full = compute_predictive_aggregation(mu_samples_full, sigma2_samples_full)
+        scores_full = score_bundle(mu_samples_full_n, sigma2_samples_full_n, mu_star_full, sigma2_star_full,
+                                    mu_true_full, sigma_true_full)
         
         # 2D grid evaluation for heatmaps
         heatmap_grid_points = 30  # Smaller for BAMLSS (slower)
@@ -2251,6 +2534,16 @@ def run_bamlss_ovb_rho_experiment(
         summary_rows.append({
             'rho': rho, 'beta2': beta2, 'empirical_corr': empirical_corr,
             'mse': mse, 'mse_full': mse_full,
+            'crps_mixture': scores_omitted['crps_mixture'], 'nll_mixture': scores_omitted['nll_mixture'],
+            'crps_gaussian': scores_omitted['crps_gaussian'], 'nll_gaussian': scores_omitted['nll_gaussian'],
+            'oracle_crps': scores_omitted['oracle_crps'], 'oracle_nll': scores_omitted['oracle_nll'],
+            'iqd': scores_omitted['iqd'], 'kl': scores_omitted['kl'],
+            'kl_mean': scores_omitted['kl_mean'], 'kl_spread': scores_omitted['kl_spread'],  # flagship OVB diagnostics
+            'crps_mixture_full': scores_full['crps_mixture'], 'nll_mixture_full': scores_full['nll_mixture'],
+            'crps_gaussian_full': scores_full['crps_gaussian'], 'nll_gaussian_full': scores_full['nll_gaussian'],
+            'oracle_crps_full': scores_full['oracle_crps'], 'oracle_nll_full': scores_full['oracle_nll'],
+            'iqd_full': scores_full['iqd'], 'kl_full': scores_full['kl'],
+            'kl_mean_full': scores_full['kl_mean'], 'kl_spread_full': scores_full['kl_spread'],
             'mean_ale_var': np.mean(ale_var), 'mean_epi_var': np.mean(epi_var), 'mean_tot_var': np.mean(tot_var),
             'mean_ale_var_norm': np.mean(ale_var_norm), 'mean_epi_var_norm': np.mean(epi_var_norm), 'mean_tot_var_norm': np.mean(tot_var_norm),
             'au_eu_corr_var': np.corrcoef(ale_var.flatten(), epi_var.flatten())[0, 1],
@@ -2412,6 +2705,34 @@ def run_bamlss_ovb_beta2_experiment(
         tot_entropy_full = entropy_results_full['total']
         
         mse_full = np.mean((mu_pred_full.squeeze() - Y.squeeze())**2)
+
+        # --- Analytic exact-expected CRPS/NLL against the known true distribution (new
+        # capability, OVB had none before). Omitted model's true target variance is inflated
+        # by the omitted-variable term; full model's is not. See utils/analytic_scores.py
+        # docstring for why these are exact expectations, not Monte-Carlo estimates against a
+        # fixed test set.
+        sigma_fn = get_dgp(func_type, noise_type).sigma_fn
+        mean_fn = get_dgp(func_type, noise_type).mean_fn
+
+        mu_true_omitted = np.asarray(y_grid_clean).squeeze()
+        sigma_intrinsic_grid = sigma_fn(np.asarray(x_grid).squeeze())
+        sigma_true_omitted = np.sqrt(sigma_intrinsic_grid ** 2 + (beta2_val ** 2) * (1.0 - rho ** 2))
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(mu_true_omitted)
+        )
+        mu_star_om, sigma2_star_om = compute_predictive_aggregation(mu_samples, sigma2_samples)
+        scores_omitted = score_bundle(mu_samples_n, sigma2_samples_n, mu_star_om, sigma2_star_om,
+                                       mu_true_omitted, sigma_true_omitted)
+
+        x_full_flat = np.asarray(X).squeeze()
+        mu_true_full = mean_fn(x_full_flat)
+        sigma_true_full = sigma_fn(x_full_flat)
+        mu_samples_full_n, sigma2_samples_full_n = normalize_mixture_arrays(
+            mu_samples_full, sigma2_samples_full, n_expected=len(x_full_flat)
+        )
+        mu_star_full, sigma2_star_full = compute_predictive_aggregation(mu_samples_full, sigma2_samples_full)
+        scores_full = score_bundle(mu_samples_full_n, sigma2_samples_full_n, mu_star_full, sigma2_star_full,
+                                    mu_true_full, sigma_true_full)
         
         # 2D grid
         heatmap_grid_points = 30
@@ -2467,6 +2788,16 @@ def run_bamlss_ovb_beta2_experiment(
         summary_rows.append({
             'rho': rho, 'beta2': beta2_val, 'empirical_corr': empirical_corr,
             'mse': mse, 'mse_full': mse_full,
+            'crps_mixture': scores_omitted['crps_mixture'], 'nll_mixture': scores_omitted['nll_mixture'],
+            'crps_gaussian': scores_omitted['crps_gaussian'], 'nll_gaussian': scores_omitted['nll_gaussian'],
+            'oracle_crps': scores_omitted['oracle_crps'], 'oracle_nll': scores_omitted['oracle_nll'],
+            'iqd': scores_omitted['iqd'], 'kl': scores_omitted['kl'],
+            'kl_mean': scores_omitted['kl_mean'], 'kl_spread': scores_omitted['kl_spread'],  # flagship OVB diagnostics
+            'crps_mixture_full': scores_full['crps_mixture'], 'nll_mixture_full': scores_full['nll_mixture'],
+            'crps_gaussian_full': scores_full['crps_gaussian'], 'nll_gaussian_full': scores_full['nll_gaussian'],
+            'oracle_crps_full': scores_full['oracle_crps'], 'oracle_nll_full': scores_full['oracle_nll'],
+            'iqd_full': scores_full['iqd'], 'kl_full': scores_full['kl'],
+            'kl_mean_full': scores_full['kl_mean'], 'kl_spread_full': scores_full['kl_spread'],
             'mean_ale_var': np.mean(ale_var), 'mean_epi_var': np.mean(epi_var), 'mean_tot_var': np.mean(tot_var),
             'mean_ale_var_norm': np.mean(ale_var_norm), 'mean_epi_var_norm': np.mean(epi_var_norm), 'mean_tot_var_norm': np.mean(tot_var_norm),
             'au_eu_corr_var': np.corrcoef(ale_var.flatten(), epi_var.flatten())[0, 1],
