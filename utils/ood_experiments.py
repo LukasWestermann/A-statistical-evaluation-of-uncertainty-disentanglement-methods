@@ -87,11 +87,10 @@ def accumulate_plot_data(
 
 from utils.entropy_uncertainty import entropy_uncertainty_by_method
 from utils.device import get_device_for_worker, get_num_gpus
+from utils.mixture_metrics import get_dgp, normalize_mixture_arrays
+from utils.analytic_scores import score_bundle
 from utils.metrics import (
     compute_predictive_aggregation,
-    compute_gaussian_nll,
-    compute_crps_gaussian,
-    compute_true_noise_variance,
     compute_uncertainty_disentanglement
 )
 
@@ -435,10 +434,16 @@ def compute_and_save_statistics_ood(
     spearman_aleatoric_combined: float = None,
     spearman_epistemic_id: float = None,
     spearman_epistemic_ood: float = None,
-    spearman_epistemic_combined: float = None
+    spearman_epistemic_combined: float = None,
+    extra_metrics: dict = None
 ):
     """
     Shared function to compute normalized statistics and save results for OOD experiments.
+
+    extra_metrics, if given, is {'ID': {...}, 'OOD': {...}, 'Combined': {...}}, each an
+    utils.analytic_scores.score_bundle() dict -- carries oracle_crps/oracle_nll/iqd/kl/
+    kl_mean/kl_spread/crps_gaussian/nll_gaussian through to the saved Excel columns
+    (nll_id/crps_id etc. above already carry the primary mixture-based scores).
     
     This function normalizes uncertainties, computes averages and correlations,
     prints formatted statistics, and saves results separately for ID, OOD, and combined regions.
@@ -538,7 +543,16 @@ def compute_and_save_statistics_ood(
         crps_val = metrics['crps']
         spear_ale_val = metrics['spear_ale']
         spear_epi_val = metrics['spear_epi']
-        
+        extra = (extra_metrics or {}).get(region_name, {})
+        oracle_crps_val = extra.get('oracle_crps')
+        oracle_nll_val = extra.get('oracle_nll')
+        iqd_val = extra.get('iqd')
+        kl_val = extra.get('kl')
+        kl_mean_val = extra.get('kl_mean')
+        kl_spread_val = extra.get('kl_spread')
+        nll_gaussian_val = extra.get('nll_gaussian')
+        crps_gaussian_val = extra.get('crps_gaussian')
+
         # Print statistics
         nll_str = f"{nll_val:>15.6f}" if nll_val is not None else f"{'N/A':>15}"
         crps_str = f"{crps_val:>15.6f}" if crps_val is not None else f"{'N/A':>15}"
@@ -546,7 +560,7 @@ def compute_and_save_statistics_ood(
         spear_epi_str = f"{spear_epi_val:>15.6f}" if spear_epi_val is not None else f"{'N/A':>15}"
         print_line = f"{region_name:<12} {avg_ale_norm:>24.6f}  {avg_epi_norm:>24.6f}  {avg_tot_norm:>24.6f}  {correlation:>24.6f}  {mse:>15.6f} {nll_str} {crps_str} {spear_ale_str} {spear_epi_str}"
         print(print_line)
-        
+
         # Save statistics for this region (don't save individual files, accumulate for combined Excel)
         stats_df, fig = save_summary_statistics_ood(
             [avg_ale_norm], [avg_epi_norm], [avg_tot_norm], [correlation], [mse],
@@ -557,9 +571,17 @@ def compute_and_save_statistics_ood(
             crps_list=[crps_val] if crps_val is not None else None,
             spearman_aleatoric_list=[spear_ale_val] if spear_ale_val is not None else None,
             spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None,
+            oracle_crps_list=[oracle_crps_val] if oracle_crps_val is not None else None,
+            oracle_nll_list=[oracle_nll_val] if oracle_nll_val is not None else None,
+            iqd_list=[iqd_val] if iqd_val is not None else None,
+            kl_list=[kl_val] if kl_val is not None else None,
+            kl_mean_list=[kl_mean_val] if kl_mean_val is not None else None,
+            kl_spread_list=[kl_spread_val] if kl_spread_val is not None else None,
+            nll_gaussian_list=[nll_gaussian_val] if nll_gaussian_val is not None else None,
+            crps_gaussian_list=[crps_gaussian_val] if crps_gaussian_val is not None else None,
             save_individual=False
         )
-        
+
         # Accumulate statistics for combined Excel file
         if noise_type not in _accumulated_ood_stats:
             _accumulated_ood_stats[noise_type] = {}
@@ -571,7 +593,7 @@ def compute_and_save_statistics_ood(
         if fig is not None:
             plt.show()
             plt.close(fig)
-        
+
         results[region_name.lower()] = {
             'avg_ale_norm': avg_ale_norm,
             'avg_epi_norm': avg_epi_norm,
@@ -582,6 +604,14 @@ def compute_and_save_statistics_ood(
             'crps': crps_val,
             'spearman_aleatoric': spear_ale_val,
             'spearman_epistemic': spear_epi_val,
+            'oracle_crps': oracle_crps_val,
+            'oracle_nll': oracle_nll_val,
+            'iqd': iqd_val,
+            'kl': kl_val,
+            'kl_mean': kl_mean_val,
+            'kl_spread': kl_spread_val,
+            'nll_gaussian': nll_gaussian_val,
+            'crps_gaussian': crps_gaussian_val,
             'stats_df': stats_df
         }
     
@@ -939,21 +969,41 @@ def run_mc_dropout_ood_experiment(
         mse_ood = np.mean((mu_pred_flat[ood_mask] - y_grid_clean_flat[ood_mask])**2)
         mse_combined = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
         
-        # Compute predictive aggregation (μ*, σ*²)
+        # Compute predictive aggregation (μ*, σ*²) -- still needed for the moment-matched
+        # Gaussian scores below and for compute_uncertainty_disentanglement.
         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-        
-        # Compute true noise variance for grid points
-        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-        
-        # Compute NLL, CRPS, and disentanglement metrics for each region
-        nll_id = compute_gaussian_nll(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
-        nll_ood = compute_gaussian_nll(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
-        nll_combined = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-        
-        crps_id = compute_crps_gaussian(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
-        crps_ood = compute_crps_gaussian(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
-        crps_combined = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
-        
+
+        # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance (confirmed
+        # wrong for the homoscedastic case: silently returns sigma=2.0 instead of the true
+        # 1.0 whenever tau isn't passed, which is every call here). y_grid_clean IS the
+        # true conditional mean f(x) for this DGP.
+        sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement below
+
+        # Analytic exact-expected CRPS/NLL against the TRUE distribution N(y_grid_clean,
+        # sigma_true^2) -- replaces the old clean-target scoring (compute_gaussian_nll/
+        # compute_crps_gaussian scored against y_grid_clean with zero variance, which broke
+        # the proper-scoring-rule guarantee). See utils/analytic_scores.py docstring.
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+        )
+        scores_id = score_bundle(mu_samples_n[:, id_mask], sigma2_samples_n[:, id_mask],
+                                  mu_star[id_mask], sigma2_star[id_mask],
+                                  y_grid_clean_flat[id_mask], sigma_true_flat[id_mask])
+        scores_ood = score_bundle(mu_samples_n[:, ood_mask], sigma2_samples_n[:, ood_mask],
+                                   mu_star[ood_mask], sigma2_star[ood_mask],
+                                   y_grid_clean_flat[ood_mask], sigma_true_flat[ood_mask])
+        scores_combined = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                        y_grid_clean_flat, sigma_true_flat)
+        extra_metrics = {'ID': scores_id, 'OOD': scores_ood, 'Combined': scores_combined}
+
+        # Primary NLL/CRPS = full-mixture scores (the model's actual K-member predictive
+        # distribution, not a moment-matched collapse). Gaussian-moment-matched scores are
+        # also available, labeled, in extra_metrics/scores_*['*_gaussian'].
+        nll_id, crps_id = scores_id['nll_mixture'], scores_id['crps_mixture']
+        nll_ood, crps_ood = scores_ood['nll_mixture'], scores_ood['crps_mixture']
+        nll_combined, crps_combined = scores_combined['nll_mixture'], scores_combined['crps_mixture']
+
         disentangle_id = compute_uncertainty_disentanglement(
             y_grid_clean_flat[id_mask], mu_star[id_mask],
             ale_var[id_mask], epi_var[id_mask], true_noise_var[id_mask]
@@ -1059,7 +1109,8 @@ def run_mc_dropout_ood_experiment(
             spearman_aleatoric_combined=disentangle_combined['spearman_aleatoric'],
             spearman_epistemic_id=disentangle_id['spearman_epistemic'],
             spearman_epistemic_ood=disentangle_ood['spearman_epistemic'],
-            spearman_epistemic_combined=disentangle_combined['spearman_epistemic']
+            spearman_epistemic_combined=disentangle_combined['spearman_epistemic'],
+            extra_metrics=extra_metrics
         )
         
         # Compute and save entropy-based statistics
@@ -1245,21 +1296,41 @@ def run_deep_ensemble_ood_experiment(
         mse_ood = np.mean((mu_pred_flat[ood_mask] - y_grid_clean_flat[ood_mask])**2)
         mse_combined = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
         
-        # Compute predictive aggregation (μ*, σ*²)
+        # Compute predictive aggregation (μ*, σ*²) -- still needed for the moment-matched
+        # Gaussian scores below and for compute_uncertainty_disentanglement.
         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-        
-        # Compute true noise variance for grid points
-        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-        
-        # Compute NLL, CRPS, and disentanglement metrics for each region
-        nll_id = compute_gaussian_nll(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
-        nll_ood = compute_gaussian_nll(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
-        nll_combined = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-        
-        crps_id = compute_crps_gaussian(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
-        crps_ood = compute_crps_gaussian(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
-        crps_combined = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
-        
+
+        # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance (confirmed
+        # wrong for the homoscedastic case: silently returns sigma=2.0 instead of the true
+        # 1.0 whenever tau isn't passed, which is every call here). y_grid_clean IS the
+        # true conditional mean f(x) for this DGP.
+        sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement below
+
+        # Analytic exact-expected CRPS/NLL against the TRUE distribution N(y_grid_clean,
+        # sigma_true^2) -- replaces the old clean-target scoring (compute_gaussian_nll/
+        # compute_crps_gaussian scored against y_grid_clean with zero variance, which broke
+        # the proper-scoring-rule guarantee). See utils/analytic_scores.py docstring.
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+        )
+        scores_id = score_bundle(mu_samples_n[:, id_mask], sigma2_samples_n[:, id_mask],
+                                  mu_star[id_mask], sigma2_star[id_mask],
+                                  y_grid_clean_flat[id_mask], sigma_true_flat[id_mask])
+        scores_ood = score_bundle(mu_samples_n[:, ood_mask], sigma2_samples_n[:, ood_mask],
+                                   mu_star[ood_mask], sigma2_star[ood_mask],
+                                   y_grid_clean_flat[ood_mask], sigma_true_flat[ood_mask])
+        scores_combined = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                        y_grid_clean_flat, sigma_true_flat)
+        extra_metrics = {'ID': scores_id, 'OOD': scores_ood, 'Combined': scores_combined}
+
+        # Primary NLL/CRPS = full-mixture scores (the model's actual K-member predictive
+        # distribution, not a moment-matched collapse). Gaussian-moment-matched scores are
+        # also available, labeled, in extra_metrics/scores_*['*_gaussian'].
+        nll_id, crps_id = scores_id['nll_mixture'], scores_id['crps_mixture']
+        nll_ood, crps_ood = scores_ood['nll_mixture'], scores_ood['crps_mixture']
+        nll_combined, crps_combined = scores_combined['nll_mixture'], scores_combined['crps_mixture']
+
         disentangle_id = compute_uncertainty_disentanglement(
             y_grid_clean_flat[id_mask], mu_star[id_mask],
             ale_var[id_mask], epi_var[id_mask], true_noise_var[id_mask]
@@ -1363,7 +1434,8 @@ def run_deep_ensemble_ood_experiment(
             spearman_aleatoric_combined=disentangle_combined['spearman_aleatoric'],
             spearman_epistemic_id=disentangle_id['spearman_epistemic'],
             spearman_epistemic_ood=disentangle_ood['spearman_epistemic'],
-            spearman_epistemic_combined=disentangle_combined['spearman_epistemic']
+            spearman_epistemic_combined=disentangle_combined['spearman_epistemic'],
+            extra_metrics=extra_metrics
         )
         
         # Compute and save entropy-based statistics
@@ -1556,21 +1628,41 @@ def run_bnn_ood_experiment(
         mse_ood = np.mean((mu_pred_flat[ood_mask] - y_grid_clean_flat[ood_mask])**2)
         mse_combined = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
         
-        # Compute predictive aggregation (μ*, σ*²)
+        # Compute predictive aggregation (μ*, σ*²) -- still needed for the moment-matched
+        # Gaussian scores below and for compute_uncertainty_disentanglement.
         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-        
-        # Compute true noise variance for grid points
-        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-        
-        # Compute NLL, CRPS, and disentanglement metrics for each region
-        nll_id = compute_gaussian_nll(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
-        nll_ood = compute_gaussian_nll(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
-        nll_combined = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-        
-        crps_id = compute_crps_gaussian(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
-        crps_ood = compute_crps_gaussian(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
-        crps_combined = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
-        
+
+        # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance (confirmed
+        # wrong for the homoscedastic case: silently returns sigma=2.0 instead of the true
+        # 1.0 whenever tau isn't passed, which is every call here). y_grid_clean IS the
+        # true conditional mean f(x) for this DGP.
+        sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement below
+
+        # Analytic exact-expected CRPS/NLL against the TRUE distribution N(y_grid_clean,
+        # sigma_true^2) -- replaces the old clean-target scoring (compute_gaussian_nll/
+        # compute_crps_gaussian scored against y_grid_clean with zero variance, which broke
+        # the proper-scoring-rule guarantee). See utils/analytic_scores.py docstring.
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+        )
+        scores_id = score_bundle(mu_samples_n[:, id_mask], sigma2_samples_n[:, id_mask],
+                                  mu_star[id_mask], sigma2_star[id_mask],
+                                  y_grid_clean_flat[id_mask], sigma_true_flat[id_mask])
+        scores_ood = score_bundle(mu_samples_n[:, ood_mask], sigma2_samples_n[:, ood_mask],
+                                   mu_star[ood_mask], sigma2_star[ood_mask],
+                                   y_grid_clean_flat[ood_mask], sigma_true_flat[ood_mask])
+        scores_combined = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                        y_grid_clean_flat, sigma_true_flat)
+        extra_metrics = {'ID': scores_id, 'OOD': scores_ood, 'Combined': scores_combined}
+
+        # Primary NLL/CRPS = full-mixture scores (the model's actual K-member predictive
+        # distribution, not a moment-matched collapse). Gaussian-moment-matched scores are
+        # also available, labeled, in extra_metrics/scores_*['*_gaussian'].
+        nll_id, crps_id = scores_id['nll_mixture'], scores_id['crps_mixture']
+        nll_ood, crps_ood = scores_ood['nll_mixture'], scores_ood['crps_mixture']
+        nll_combined, crps_combined = scores_combined['nll_mixture'], scores_combined['crps_mixture']
+
         disentangle_id = compute_uncertainty_disentanglement(
             y_grid_clean_flat[id_mask], mu_star[id_mask],
             ale_var[id_mask], epi_var[id_mask], true_noise_var[id_mask]
@@ -1673,7 +1765,8 @@ def run_bnn_ood_experiment(
             spearman_aleatoric_combined=disentangle_combined['spearman_aleatoric'],
             spearman_epistemic_id=disentangle_id['spearman_epistemic'],
             spearman_epistemic_ood=disentangle_ood['spearman_epistemic'],
-            spearman_epistemic_combined=disentangle_combined['spearman_epistemic']
+            spearman_epistemic_combined=disentangle_combined['spearman_epistemic'],
+            extra_metrics=extra_metrics
         )
         
         # Compute and save entropy-based statistics
@@ -1848,21 +1941,41 @@ def run_bamlss_ood_experiment(
         mse_ood = np.mean((mu_pred_flat[ood_mask] - y_grid_clean_flat[ood_mask])**2)
         mse_combined = np.mean((mu_pred_flat - y_grid_clean_flat)**2)
         
-        # Compute predictive aggregation (μ*, σ*²)
+        # Compute predictive aggregation (μ*, σ*²) -- still needed for the moment-matched
+        # Gaussian scores below and for compute_uncertainty_disentanglement.
         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-        
-        # Compute true noise variance for grid points
-        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-        
-        # Compute NLL, CRPS, and disentanglement metrics for each region
-        nll_id = compute_gaussian_nll(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
-        nll_ood = compute_gaussian_nll(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
-        nll_combined = compute_gaussian_nll(y_grid_clean_flat, mu_star, sigma2_star)
-        
-        crps_id = compute_crps_gaussian(y_grid_clean_flat[id_mask], mu_star[id_mask], sigma2_star[id_mask])
-        crps_ood = compute_crps_gaussian(y_grid_clean_flat[ood_mask], mu_star[ood_mask], sigma2_star[ood_mask])
-        crps_combined = compute_crps_gaussian(y_grid_clean_flat, mu_star, sigma2_star)
-        
+
+        # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance (confirmed
+        # wrong for the homoscedastic case: silently returns sigma=2.0 instead of the true
+        # 1.0 whenever tau isn't passed, which is every call here). y_grid_clean IS the
+        # true conditional mean f(x) for this DGP.
+        sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement below
+
+        # Analytic exact-expected CRPS/NLL against the TRUE distribution N(y_grid_clean,
+        # sigma_true^2) -- replaces the old clean-target scoring (compute_gaussian_nll/
+        # compute_crps_gaussian scored against y_grid_clean with zero variance, which broke
+        # the proper-scoring-rule guarantee). See utils/analytic_scores.py docstring.
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+        )
+        scores_id = score_bundle(mu_samples_n[:, id_mask], sigma2_samples_n[:, id_mask],
+                                  mu_star[id_mask], sigma2_star[id_mask],
+                                  y_grid_clean_flat[id_mask], sigma_true_flat[id_mask])
+        scores_ood = score_bundle(mu_samples_n[:, ood_mask], sigma2_samples_n[:, ood_mask],
+                                   mu_star[ood_mask], sigma2_star[ood_mask],
+                                   y_grid_clean_flat[ood_mask], sigma_true_flat[ood_mask])
+        scores_combined = score_bundle(mu_samples_n, sigma2_samples_n, mu_star, sigma2_star,
+                                        y_grid_clean_flat, sigma_true_flat)
+        extra_metrics = {'ID': scores_id, 'OOD': scores_ood, 'Combined': scores_combined}
+
+        # Primary NLL/CRPS = full-mixture scores (the model's actual K-member predictive
+        # distribution, not a moment-matched collapse). Gaussian-moment-matched scores are
+        # also available, labeled, in extra_metrics/scores_*['*_gaussian'].
+        nll_id, crps_id = scores_id['nll_mixture'], scores_id['crps_mixture']
+        nll_ood, crps_ood = scores_ood['nll_mixture'], scores_ood['crps_mixture']
+        nll_combined, crps_combined = scores_combined['nll_mixture'], scores_combined['crps_mixture']
+
         disentangle_id = compute_uncertainty_disentanglement(
             y_grid_clean_flat[id_mask], mu_star[id_mask],
             ale_var[id_mask], epi_var[id_mask], true_noise_var[id_mask]
@@ -1965,7 +2078,8 @@ def run_bamlss_ood_experiment(
             spearman_aleatoric_combined=disentangle_combined['spearman_aleatoric'],
             spearman_epistemic_id=disentangle_id['spearman_epistemic'],
             spearman_epistemic_ood=disentangle_ood['spearman_epistemic'],
-            spearman_epistemic_combined=disentangle_combined['spearman_epistemic']
+            spearman_epistemic_combined=disentangle_combined['spearman_epistemic'],
+            extra_metrics=extra_metrics
         )
         
         # Compute and save entropy-based statistics

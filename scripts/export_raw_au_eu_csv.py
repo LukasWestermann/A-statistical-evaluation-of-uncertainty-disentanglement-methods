@@ -37,6 +37,15 @@ were verified against. sigma2_true is a variance-decomposition ground truth only
 no entropy-scale ground truth is emitted (entropy AU/EU are in nats, not the
 variance/sigma^2 units sigma2_true is in, so they aren't directly comparable).
 
+This script is the raw AU/EU/TU export only -- it does NOT compute CRPS/NLL/oracle
+scoring. score_bundle_pointwise's closed-form mixture term is O(M^2 * N) in both time
+and memory (materializes an (M, M, N) array); BAMLSS files here have M=1000 posterior
+draws x N=1000 grid points, which allocates tens of GB and gets the process OOM-killed.
+Predictive-distribution scoring against the true DGP belongs to
+scripts/eval_predictive_baseline.py (which trains fresh and scores at a bounded test-set
+size), not to this read-only npz sweep over every saved run. If you need CRPS/NLL for a
+specific saved file, call utils.analytic_scores.score_bundle_pointwise directly on it.
+
 One row per (npz file, grid point). Includes the seed column when present (seed-
 replication pilot) -- None/NaN for legacy single-run files that predate it, never
 fabricated. Also includes each model's saved hyperparameters (dropout_p/mc_samples

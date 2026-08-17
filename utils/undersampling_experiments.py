@@ -95,11 +95,10 @@ from utils.plotting import (
 )
 from utils.entropy_uncertainty import entropy_uncertainty_by_method
 from utils.device import get_device_for_worker, get_num_gpus
+from utils.mixture_metrics import get_dgp, normalize_mixture_arrays
+from utils.analytic_scores import score_bundle
 from utils.metrics import (
     compute_predictive_aggregation,
-    compute_gaussian_nll,
-    compute_crps_gaussian,
-    compute_true_noise_variance,
     compute_uncertainty_disentanglement
 )
 
@@ -461,11 +460,17 @@ def compute_and_save_statistics_undersampling(
     nll_by_region: list = None,
     crps_by_region: list = None,
     spearman_aleatoric_by_region: list = None,
-    spearman_epistemic_by_region: list = None
+    spearman_epistemic_by_region: list = None,
+    extra_metrics: dict = None
 ):
     """
     Shared function to compute normalized statistics and save results for undersampling experiments.
-    
+
+    extra_metrics, if given, is keyed by region name (e.g. 'Region_1', 'Region_2', ...),
+    each value an utils.analytic_scores.score_bundle() dict -- carries oracle_crps/oracle_nll/
+    iqd/kl/kl_mean/kl_spread/crps_gaussian/nll_gaussian through to the saved Excel columns
+    (nll_by_region/crps_by_region above already carry the primary mixture-based scores).
+
     This function normalizes uncertainties, computes averages and correlations,
     prints formatted statistics, and saves results separately for each region.
     
@@ -548,7 +553,16 @@ def compute_and_save_statistics_undersampling(
         crps_val = crps_by_region[idx] if crps_by_region is not None else None
         spear_ale_val = spearman_aleatoric_by_region[idx] if spearman_aleatoric_by_region is not None else None
         spear_epi_val = spearman_epistemic_by_region[idx] if spearman_epistemic_by_region is not None else None
-        
+        extra = (extra_metrics or {}).get(region_name, {})
+        oracle_crps_val = extra.get('oracle_crps')
+        oracle_nll_val = extra.get('oracle_nll')
+        iqd_val = extra.get('iqd')
+        kl_val = extra.get('kl')
+        kl_mean_val = extra.get('kl_mean')
+        kl_spread_val = extra.get('kl_spread')
+        nll_gaussian_val = extra.get('nll_gaussian')
+        crps_gaussian_val = extra.get('crps_gaussian')
+
         # Print statistics
         nll_str = f"{nll_val:>14.6f}" if nll_val is not None else f"{'N/A':>14}"
         crps_str = f"{crps_val:>14.6f}" if crps_val is not None else f"{'N/A':>14}"
@@ -568,9 +582,17 @@ def compute_and_save_statistics_undersampling(
             crps_list=[crps_val] if crps_val is not None else None,
             spearman_aleatoric_list=[spear_ale_val] if spear_ale_val is not None else None,
             spearman_epistemic_list=[spear_epi_val] if spear_epi_val is not None else None,
+            oracle_crps_list=[oracle_crps_val] if oracle_crps_val is not None else None,
+            oracle_nll_list=[oracle_nll_val] if oracle_nll_val is not None else None,
+            iqd_list=[iqd_val] if iqd_val is not None else None,
+            kl_list=[kl_val] if kl_val is not None else None,
+            kl_mean_list=[kl_mean_val] if kl_mean_val is not None else None,
+            kl_spread_list=[kl_spread_val] if kl_spread_val is not None else None,
+            nll_gaussian_list=[nll_gaussian_val] if nll_gaussian_val is not None else None,
+            crps_gaussian_list=[crps_gaussian_val] if crps_gaussian_val is not None else None,
             save_individual=True
         )
-        
+
         # Accumulate statistics for combined Excel file
         if noise_type not in _accumulated_undersampling_stats:
             _accumulated_undersampling_stats[noise_type] = {}
@@ -578,7 +600,7 @@ def compute_and_save_statistics_undersampling(
         if key not in _accumulated_undersampling_stats[noise_type]:
             _accumulated_undersampling_stats[noise_type][key] = {}
         _accumulated_undersampling_stats[noise_type][key]['variance'] = stats_df
-        
+
         results[region_name.lower()] = {
             'avg_ale_norm': avg_ale_norm,
             'avg_epi_norm': avg_epi_norm,
@@ -590,6 +612,14 @@ def compute_and_save_statistics_undersampling(
             'crps': crps_val,
             'spearman_aleatoric': spear_ale_val,
             'spearman_epistemic': spear_epi_val,
+            'oracle_crps': oracle_crps_val,
+            'oracle_nll': oracle_nll_val,
+            'iqd': iqd_val,
+            'kl': kl_val,
+            'kl_mean': kl_mean_val,
+            'kl_spread': kl_spread_val,
+            'nll_gaussian': nll_gaussian_val,
+            'crps_gaussian': crps_gaussian_val,
             'stats_df': stats_df
         }
     
@@ -1119,20 +1149,38 @@ def run_mc_dropout_undersampling_experiment(
         
         # Compute predictive aggregation (μ*, σ*²)
         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-        
-        # Compute true noise variance for grid points
-        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-        
+
+        # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance (confirmed
+        # wrong for the homoscedastic case: silently returns sigma=2.0 instead of the true
+        # 1.0 whenever tau isn't passed, which is every call here). y_grid_clean IS the
+        # true conditional mean f(x) for this DGP.
+        sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement below
+
+        # Analytic exact-expected CRPS/NLL against the TRUE distribution N(y_grid_clean,
+        # sigma_true^2) -- replaces the old clean-target scoring (compute_gaussian_nll/
+        # compute_crps_gaussian scored against y_grid_clean with zero variance, which broke
+        # the proper-scoring-rule guarantee). See utils/analytic_scores.py docstring.
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+        )
+
         # Compute NLL, CRPS, and disentanglement metrics for each region
         nll_by_region = []
         crps_by_region = []
         spearman_aleatoric_by_region = []
         spearman_epistemic_by_region = []
-        
-        for mask in region_masks:
+        extra_metrics_by_region = {}
+
+        for idx, mask in enumerate(region_masks):
+            region_name = f"Region_{idx+1}"
             if np.any(mask):
-                nll = compute_gaussian_nll(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
-                crps = compute_crps_gaussian(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                scores = score_bundle(
+                    mu_samples_n[:, mask], sigma2_samples_n[:, mask],
+                    mu_star[mask], sigma2_star[mask],
+                    y_grid_clean_flat[mask], sigma_true_flat[mask]
+                )
+                nll, crps = scores['nll_mixture'], scores['crps_mixture']
                 disentangle = compute_uncertainty_disentanglement(
                     y_grid_clean_flat[mask], mu_star[mask],
                     ale_var[mask], epi_var[mask], true_noise_var[mask]
@@ -1141,11 +1189,17 @@ def run_mc_dropout_undersampling_experiment(
                 crps_by_region.append(crps)
                 spearman_aleatoric_by_region.append(disentangle['spearman_aleatoric'])
                 spearman_epistemic_by_region.append(disentangle['spearman_epistemic'])
+                extra_metrics_by_region[region_name] = scores
             else:
                 nll_by_region.append(0.0)
                 crps_by_region.append(0.0)
                 spearman_aleatoric_by_region.append(0.0)
                 spearman_epistemic_by_region.append(0.0)
+                extra_metrics_by_region[region_name] = {
+                    'oracle_crps': 0.0, 'oracle_nll': 0.0, 'iqd': 0.0,
+                    'kl': 0.0, 'kl_mean': 0.0, 'kl_spread': 0.0,
+                    'nll_gaussian': 0.0, 'crps_gaussian': 0.0
+                }
         
         # Save raw model outputs
         save_model_outputs(
@@ -1200,7 +1254,8 @@ def run_mc_dropout_undersampling_experiment(
             date=date, dropout_p=p, mc_samples=mc_samples,
             nll_by_region=nll_by_region, crps_by_region=crps_by_region,
             spearman_aleatoric_by_region=spearman_aleatoric_by_region,
-            spearman_epistemic_by_region=spearman_epistemic_by_region
+            spearman_epistemic_by_region=spearman_epistemic_by_region,
+            extra_metrics=extra_metrics_by_region
         )
         
         # Compute and save entropy-based statistics
@@ -1344,10 +1399,7 @@ def run_deep_ensemble_undersampling_experiment(
         
         # Compute predictive aggregation (mu*, sigma*^2)
         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-        
-        # Compute true noise variance for grid points
-        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-        
+
         # Split uncertainties by region
         uncertainties_by_region = []
         uncertainties_entropy_by_region = []
@@ -1356,47 +1408,74 @@ def run_deep_ensemble_undersampling_experiment(
         crps_by_region = []
         spearman_aleatoric_by_region = []
         spearman_epistemic_by_region = []
-        
+        extra_metrics_by_region = {}
+
         mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
         y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
-        
-        for mask in region_masks:
+
+        # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance (confirmed
+        # wrong for the homoscedastic case: silently returns sigma=2.0 instead of the true
+        # 1.0 whenever tau isn't passed, which is every call here). y_grid_clean IS the
+        # true conditional mean f(x) for this DGP.
+        sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement below
+
+        # Analytic exact-expected CRPS/NLL against the TRUE distribution N(y_grid_clean,
+        # sigma_true^2) -- replaces the old clean-target scoring (compute_gaussian_nll/
+        # compute_crps_gaussian scored against y_grid_clean with zero variance, which broke
+        # the proper-scoring-rule guarantee). See utils/analytic_scores.py docstring.
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+        )
+
+        for idx, mask in enumerate(region_masks):
+            region_name = f"Region_{idx+1}"
             uncertainties_by_region.append({
                 'ale': ale_var[mask].flatten() if ale_var.ndim > 1 else ale_var[mask],
                 'epi': epi_var[mask].flatten() if epi_var.ndim > 1 else epi_var[mask],
                 'tot': tot_var[mask].flatten() if tot_var.ndim > 1 else tot_var[mask]
             })
-            
+
             uncertainties_entropy_by_region.append({
                 'ale': ale_entropy[mask] if ale_entropy.ndim == 1 else ale_entropy[mask].flatten(),
                 'epi': epi_entropy[mask] if epi_entropy.ndim == 1 else epi_entropy[mask].flatten(),
                 'tot': tot_entropy[mask] if tot_entropy.ndim == 1 else tot_entropy[mask].flatten()
             })
-            
+
             if np.any(mask):
                 mse = np.mean((mu_pred_flat[mask] - y_grid_clean_flat[mask])**2)
-                
+
                 # Compute NLL, CRPS, and disentanglement metrics for this region
-                nll = compute_gaussian_nll(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
-                crps = compute_crps_gaussian(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                scores = score_bundle(
+                    mu_samples_n[:, mask], sigma2_samples_n[:, mask],
+                    mu_star[mask], sigma2_star[mask],
+                    y_grid_clean_flat[mask], sigma_true_flat[mask]
+                )
+                nll, crps = scores['nll_mixture'], scores['crps_mixture']
                 disentangle = compute_uncertainty_disentanglement(
                     y_grid_clean_flat[mask], mu_star[mask],
                     ale_var[mask] if ale_var.ndim == 1 else ale_var[mask].flatten(),
                     epi_var[mask] if epi_var.ndim == 1 else epi_var[mask].flatten(),
                     true_noise_var[mask]
                 )
+                extra_metrics_by_region[region_name] = scores
             else:
                 mse = 0.0
                 nll = 0.0
                 crps = 0.0
                 disentangle = {'spearman_aleatoric': 0.0, 'spearman_epistemic': 0.0}
-            
+                extra_metrics_by_region[region_name] = {
+                    'oracle_crps': 0.0, 'oracle_nll': 0.0, 'iqd': 0.0,
+                    'kl': 0.0, 'kl_mean': 0.0, 'kl_spread': 0.0,
+                    'nll_gaussian': 0.0, 'crps_gaussian': 0.0
+                }
+
             mse_by_region.append(mse)
             nll_by_region.append(nll)
             crps_by_region.append(crps)
             spearman_aleatoric_by_region.append(disentangle['spearman_aleatoric'])
             spearman_epistemic_by_region.append(disentangle['spearman_epistemic'])
-        
+
         # Save raw model outputs
         save_model_outputs(
             mu_samples=mu_samples,
@@ -1449,7 +1528,8 @@ def run_deep_ensemble_undersampling_experiment(
             date=date, n_nets=K,
             nll_by_region=nll_by_region, crps_by_region=crps_by_region,
             spearman_aleatoric_by_region=spearman_aleatoric_by_region,
-            spearman_epistemic_by_region=spearman_epistemic_by_region
+            spearman_epistemic_by_region=spearman_epistemic_by_region,
+            extra_metrics=extra_metrics_by_region
         )
         
         # Compute and save entropy-based statistics
@@ -1600,10 +1680,7 @@ def run_bnn_undersampling_experiment(
         
         # Compute predictive aggregation (μ*, σ*²)
         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-        
-        # Compute true noise variance for grid points
-        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-        
+
         # Split uncertainties by region
         uncertainties_by_region = []
         uncertainties_entropy_by_region = []
@@ -1612,47 +1689,74 @@ def run_bnn_undersampling_experiment(
         crps_by_region = []
         spearman_aleatoric_by_region = []
         spearman_epistemic_by_region = []
-        
+        extra_metrics_by_region = {}
+
         mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
         y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
-        
-        for mask in region_masks:
+
+        # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance (confirmed
+        # wrong for the homoscedastic case: silently returns sigma=2.0 instead of the true
+        # 1.0 whenever tau isn't passed, which is every call here). y_grid_clean IS the
+        # true conditional mean f(x) for this DGP.
+        sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement below
+
+        # Analytic exact-expected CRPS/NLL against the TRUE distribution N(y_grid_clean,
+        # sigma_true^2) -- replaces the old clean-target scoring (compute_gaussian_nll/
+        # compute_crps_gaussian scored against y_grid_clean with zero variance, which broke
+        # the proper-scoring-rule guarantee). See utils/analytic_scores.py docstring.
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+        )
+
+        for idx, mask in enumerate(region_masks):
+            region_name = f"Region_{idx+1}"
             uncertainties_by_region.append({
                 'ale': ale_var[mask].flatten() if ale_var.ndim > 1 else ale_var[mask],
                 'epi': epi_var[mask].flatten() if epi_var.ndim > 1 else epi_var[mask],
                 'tot': tot_var[mask].flatten() if tot_var.ndim > 1 else tot_var[mask]
             })
-            
+
             uncertainties_entropy_by_region.append({
                 'ale': ale_entropy[mask] if ale_entropy.ndim == 1 else ale_entropy[mask].flatten(),
                 'epi': epi_entropy[mask] if epi_entropy.ndim == 1 else epi_entropy[mask].flatten(),
                 'tot': tot_entropy[mask] if tot_entropy.ndim == 1 else tot_entropy[mask].flatten()
             })
-            
+
             if np.any(mask):
                 mse = np.mean((mu_pred_flat[mask] - y_grid_clean_flat[mask])**2)
-                
+
                 # Compute NLL, CRPS, and disentanglement metrics for this region
-                nll = compute_gaussian_nll(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
-                crps = compute_crps_gaussian(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                scores = score_bundle(
+                    mu_samples_n[:, mask], sigma2_samples_n[:, mask],
+                    mu_star[mask], sigma2_star[mask],
+                    y_grid_clean_flat[mask], sigma_true_flat[mask]
+                )
+                nll, crps = scores['nll_mixture'], scores['crps_mixture']
                 disentangle = compute_uncertainty_disentanglement(
                     y_grid_clean_flat[mask], mu_star[mask],
                     ale_var[mask] if ale_var.ndim == 1 else ale_var[mask].flatten(),
                     epi_var[mask] if epi_var.ndim == 1 else epi_var[mask].flatten(),
                     true_noise_var[mask]
                 )
+                extra_metrics_by_region[region_name] = scores
             else:
                 mse = 0.0
                 nll = 0.0
                 crps = 0.0
                 disentangle = {'spearman_aleatoric': 0.0, 'spearman_epistemic': 0.0}
-            
+                extra_metrics_by_region[region_name] = {
+                    'oracle_crps': 0.0, 'oracle_nll': 0.0, 'iqd': 0.0,
+                    'kl': 0.0, 'kl_mean': 0.0, 'kl_spread': 0.0,
+                    'nll_gaussian': 0.0, 'crps_gaussian': 0.0
+                }
+
             mse_by_region.append(mse)
             nll_by_region.append(nll)
             crps_by_region.append(crps)
             spearman_aleatoric_by_region.append(disentangle['spearman_aleatoric'])
             spearman_epistemic_by_region.append(disentangle['spearman_epistemic'])
-        
+
         # Save raw model outputs
         save_model_outputs(
             mu_samples=mu_samples,
@@ -1704,7 +1808,8 @@ def run_bnn_undersampling_experiment(
             date=date,
             nll_by_region=nll_by_region, crps_by_region=crps_by_region,
             spearman_aleatoric_by_region=spearman_aleatoric_by_region,
-            spearman_epistemic_by_region=spearman_epistemic_by_region
+            spearman_epistemic_by_region=spearman_epistemic_by_region,
+            extra_metrics=extra_metrics_by_region
         )
         
         # Compute and save entropy-based statistics
@@ -1837,10 +1942,7 @@ def run_bamlss_undersampling_experiment(
         
         # Compute predictive aggregation (μ*, σ*²)
         mu_star, sigma2_star = compute_predictive_aggregation(mu_samples, sigma2_samples)
-        
-        # Compute true noise variance for grid points
-        true_noise_var = compute_true_noise_variance(x_grid, noise_type, func_type)
-        
+
         # Split uncertainties by region
         uncertainties_by_region = []
         uncertainties_entropy_by_region = []
@@ -1849,47 +1951,74 @@ def run_bamlss_undersampling_experiment(
         crps_by_region = []
         spearman_aleatoric_by_region = []
         spearman_epistemic_by_region = []
-        
+        extra_metrics_by_region = {}
+
         mu_pred_flat = mu_pred.squeeze() if mu_pred.ndim > 1 else mu_pred
         y_grid_clean_flat = y_grid_clean.squeeze() if y_grid_clean.ndim > 1 else y_grid_clean
-        
-        for mask in region_masks:
+
+        # True noise sigma -- get_dgp.sigma_fn, NOT compute_true_noise_variance (confirmed
+        # wrong for the homoscedastic case: silently returns sigma=2.0 instead of the true
+        # 1.0 whenever tau isn't passed, which is every call here). y_grid_clean IS the
+        # true conditional mean f(x) for this DGP.
+        sigma_true_flat = get_dgp(func_type, noise_type).sigma_fn(x_grid).flatten()
+        true_noise_var = sigma_true_flat ** 2  # still used only by compute_uncertainty_disentanglement below
+
+        # Analytic exact-expected CRPS/NLL against the TRUE distribution N(y_grid_clean,
+        # sigma_true^2) -- replaces the old clean-target scoring (compute_gaussian_nll/
+        # compute_crps_gaussian scored against y_grid_clean with zero variance, which broke
+        # the proper-scoring-rule guarantee). See utils/analytic_scores.py docstring.
+        mu_samples_n, sigma2_samples_n = normalize_mixture_arrays(
+            mu_samples, sigma2_samples, n_expected=len(y_grid_clean_flat)
+        )
+
+        for idx, mask in enumerate(region_masks):
+            region_name = f"Region_{idx+1}"
             uncertainties_by_region.append({
                 'ale': ale_var[mask].flatten() if ale_var.ndim > 1 else ale_var[mask],
                 'epi': epi_var[mask].flatten() if epi_var.ndim > 1 else epi_var[mask],
                 'tot': tot_var[mask].flatten() if tot_var.ndim > 1 else tot_var[mask]
             })
-            
+
             uncertainties_entropy_by_region.append({
                 'ale': ale_entropy[mask] if ale_entropy.ndim == 1 else ale_entropy[mask].flatten(),
                 'epi': epi_entropy[mask] if epi_entropy.ndim == 1 else epi_entropy[mask].flatten(),
                 'tot': tot_entropy[mask] if tot_entropy.ndim == 1 else tot_entropy[mask].flatten()
             })
-            
+
             if np.any(mask):
                 mse = np.mean((mu_pred_flat[mask] - y_grid_clean_flat[mask])**2)
-                
+
                 # Compute NLL, CRPS, and disentanglement metrics for this region
-                nll = compute_gaussian_nll(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
-                crps = compute_crps_gaussian(y_grid_clean_flat[mask], mu_star[mask], sigma2_star[mask])
+                scores = score_bundle(
+                    mu_samples_n[:, mask], sigma2_samples_n[:, mask],
+                    mu_star[mask], sigma2_star[mask],
+                    y_grid_clean_flat[mask], sigma_true_flat[mask]
+                )
+                nll, crps = scores['nll_mixture'], scores['crps_mixture']
                 disentangle = compute_uncertainty_disentanglement(
                     y_grid_clean_flat[mask], mu_star[mask],
                     ale_var[mask] if ale_var.ndim == 1 else ale_var[mask].flatten(),
                     epi_var[mask] if epi_var.ndim == 1 else epi_var[mask].flatten(),
                     true_noise_var[mask]
                 )
+                extra_metrics_by_region[region_name] = scores
             else:
                 mse = 0.0
                 nll = 0.0
                 crps = 0.0
                 disentangle = {'spearman_aleatoric': 0.0, 'spearman_epistemic': 0.0}
-            
+                extra_metrics_by_region[region_name] = {
+                    'oracle_crps': 0.0, 'oracle_nll': 0.0, 'iqd': 0.0,
+                    'kl': 0.0, 'kl_mean': 0.0, 'kl_spread': 0.0,
+                    'nll_gaussian': 0.0, 'crps_gaussian': 0.0
+                }
+
             mse_by_region.append(mse)
             nll_by_region.append(nll)
             crps_by_region.append(crps)
             spearman_aleatoric_by_region.append(disentangle['spearman_aleatoric'])
             spearman_epistemic_by_region.append(disentangle['spearman_epistemic'])
-        
+
         # Save raw model outputs
         save_model_outputs(
             mu_samples=mu_samples,
@@ -1941,7 +2070,8 @@ def run_bamlss_undersampling_experiment(
             date=date,
             nll_by_region=nll_by_region, crps_by_region=crps_by_region,
             spearman_aleatoric_by_region=spearman_aleatoric_by_region,
-            spearman_epistemic_by_region=spearman_epistemic_by_region
+            spearman_epistemic_by_region=spearman_epistemic_by_region,
+            extra_metrics=extra_metrics_by_region
         )
         
         # Compute and save entropy-based statistics

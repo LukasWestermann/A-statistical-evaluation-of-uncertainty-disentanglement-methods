@@ -48,6 +48,13 @@ seed/date: seed is read from npz metadata (None/NaN for legacy pre-pilot files).
 date is NOT stored as npz metadata for OVB (only baked into the filename) --
 parsed from the filename's trailing YYYYMMDD token instead.
 
+This script is the raw AU/EU/TU export only -- it does NOT compute CRPS/NLL/oracle
+scoring (see scripts/export_raw_au_eu_csv.py's docstring for why: score_bundle_pointwise's
+closed-form mixture term is O(M^2 * N) in memory, and large-M files here get OOM-killed).
+For the OVB CRPS/NLL diagnostic (KL_mean/KL_spread), use utils/ovb_experiments.py's own
+run-time scoring, or call utils.analytic_scores.score_bundle_pointwise directly on one
+saved file.
+
 Usage:
     python scripts/export_ovb_raw_au_eu_csv.py
     python scripts/export_ovb_raw_au_eu_csv.py --out results/ovb/csv --filename my_export
@@ -126,6 +133,7 @@ def _rows_for_npz(npz_path: Path, search_dir: Path) -> pd.DataFrame:
     y_true_omitted = np.asarray(d["y_grid_clean"]).ravel()
     mu_pred, au, tu, eu, au_ent, eu_ent, tu_ent = _member_stats(d["mu_samples"], d["sigma2_samples"], len(x_grid))
     sigma2_true_intrinsic = sigma_fn(x_grid) ** 2
+    sigma2_true_omitted_target = sigma2_true_intrinsic + omitted_inflation
     n = len(x_grid)
     blocks.append(pd.DataFrame({
         "model_name": [model_name] * n, "noise_type": [noise_type] * n, "func_type": [func_type] * n,
@@ -133,7 +141,7 @@ def _rows_for_npz(npz_path: Path, search_dir: Path) -> pd.DataFrame:
         "x": x_grid, "y_true": y_true_omitted, "mu_pred": mu_pred, "AU": au, "EU": eu, "TU": tu,
         "AU_entropy": au_ent, "EU_entropy": eu_ent, "TU_entropy": tu_ent,
         "sigma2_true_intrinsic": sigma2_true_intrinsic,
-        "sigma2_true_omitted_target": sigma2_true_intrinsic + omitted_inflation,
+        "sigma2_true_omitted_target": sigma2_true_omitted_target,
         "which_model": ["omitted"] * n, "source_file": [source_file] * n,
     }))
 

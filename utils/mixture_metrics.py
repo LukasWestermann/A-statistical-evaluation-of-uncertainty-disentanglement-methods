@@ -76,6 +76,21 @@ def dgp_name(func_type: str, noise_type: str) -> str:
     return f"{func_type}-{noise_type}"
 
 
+def sigma_true_noise_level(x: np.ndarray, noise_type: str, tau: float) -> np.ndarray:
+    """True sigma(x) for the Noise-level experiment's tau-parametrized DGP -- NOT covered
+    by DGP_TABLE/get_dgp (whose sigma_fns are fixed-scale) and NOT
+    utils.metrics.compute_true_noise_variance (confirmed wrong: silently overrides tau to
+    a hardcoded 2.0 for the homoscedastic case whenever tau==2.5). Matches
+    Experiments/Noise_Level.ipynb's tau-aware generate_toy_regression exactly:
+        homoscedastic:   sigma(x) = tau
+        heteroscedastic: sigma(x) = |tau * sin(0.5*x + 5)|
+    Single source of truth -- also used by scripts/export_raw_au_eu_csv.py."""
+    x = np.asarray(x, dtype=float)
+    if noise_type == 'homoscedastic':
+        return np.full_like(x, float(tau))
+    return np.abs(float(tau) * np.sin(0.5 * x + 5))
+
+
 # ============================== Data generation ==============================
 
 def generate_training_data(func_type: str, noise_type: str, n_train: int = 1000,
@@ -217,6 +232,12 @@ def _abs_moment_gaussian(mu, sigma):
     return np.where(sigma > 1e-12, formula, np.abs(mu))
 
 
+# Public alias -- utils/analytic_scores.py imports this rather than reaching into a
+# leading-underscore "private" symbol across modules. Existing internal call sites
+# (mixture_crps below) are left using the private name; no need to touch them.
+abs_moment_gaussian = _abs_moment_gaussian
+
+
 def mixture_crps(y, mu, sigma2) -> np.ndarray:
     """Per-test-point closed-form CRPS of an equally-weighted Gaussian mixture, via the
     energy-distance identity CRPS(F,y) = E_F|X-y| - (1/2)E_F|X-X'|:
@@ -294,40 +315,62 @@ def stratified_coverage(x, y, quantile_dict: Dict[float, np.ndarray],
 
 # ============================== Oracle (true DGP, single Gaussian) ==============================
 
-def oracle_metrics(y_test, mu_true, sigma_true) -> Dict[str, float]:
-    """CRPS/NLL under the TRUE DGP conditional distribution N(mu_true, sigma_true^2) --
-    an achievable floor, so mixture scores are interpretable in absolute terms. The
-    oracle is genuinely a single Gaussian, so this is the one place it's correct to
-    reuse utils.metrics' single-Gaussian closed forms."""
-    from utils.metrics import compute_crps_gaussian, compute_gaussian_nll
-    sigma2_true = np.asarray(sigma_true, dtype=float) ** 2
+def oracle_metrics(mu_true, sigma_true) -> Dict[str, float]:
+    """Exact closed-form CRPS/NLL floor under the TRUE DGP conditional distribution
+    N(mu_true, sigma_true^2) -- no y_test draw needed, since these are the known DGP
+    parameters, not something to Monte-Carlo-estimate. Previously took a y_test argument
+    and scored a single noisy draw against the true Gaussian (still a valid but noisier
+    estimate of the same quantity); replaced with the exact expectation from
+    utils.analytic_scores, which IS the oracle by construction (forecast == truth)."""
+    from utils.analytic_scores import oracle_crps, oracle_nll
+    sigma_true = np.asarray(sigma_true, dtype=float)
     return {
-        'oracle_crps': float(compute_crps_gaussian(y_test, mu_true, sigma2_true)),
-        'oracle_nll': float(compute_gaussian_nll(y_test, mu_true, sigma2_true)),
+        'oracle_crps': float(oracle_crps(sigma_true).mean()),
+        'oracle_nll': float(oracle_nll(sigma_true).mean()),
     }
 
 
 # ============================== One-call evaluator ==============================
 
-def evaluate_mixture(x_test, y_test, mu, sigma2, coverage_levels: Iterable[float] = (0.5, 0.8, 0.9, 0.95),
+def evaluate_mixture(x_test, y_test, mu, sigma2, mu_true, sigma_true,
+                      coverage_levels: Iterable[float] = (0.5, 0.8, 0.9, 0.95),
                       n_bins: int = 10, include_stratified: bool = True, **brentq_kwargs) -> dict:
     """Computes RMSE, CRPS, NLL, PIT, coverage (marginal + optionally stratified), and
     sharpness for one (method, DGP, scenario, replicate) cell.
 
-    Returns {'scalar': {rmse, crps, nll, coverage_<level>..., mean_width_90,
+    CRPS/NLL are exact analytic expected scores against the known true distribution
+    N(mu_true, sigma_true^2) (utils.analytic_scores) -- not Monte-Carlo-averaged over
+    y_test, which eliminates test-set sampling noise entirely. RMSE, PIT, and
+    coverage/sharpness remain y_test-based: they are fundamentally point-estimate /
+    calibration diagnostics against actual observations, not proper-scoring-rule issues,
+    so they are unaffected by (and shouldn't be conflated with) the analytic-vs-MC choice
+    for CRPS/NLL.
+
+    Returns {'scalar': {rmse, crps, nll, nll_gaussian, coverage_<level>..., mean_width_90,
     median_width_90, mean_pred_std}, 'pit': (N,) array, 'stratified': list[dict]}."""
     from utils.metrics import compute_predictive_aggregation
+    from utils.analytic_scores import (
+        expected_crps_mixture_vs_gaussian, expected_nll_mixture_vs_gaussian,
+        expected_nll_gaussian_vs_gaussian,
+    )
 
     x_test = np.asarray(x_test, dtype=float).ravel()
     y_test = np.asarray(y_test, dtype=float).ravel()
     mu = np.asarray(mu, dtype=float)
     sigma2 = np.asarray(sigma2, dtype=float)
+    mu_true = np.asarray(mu_true, dtype=float).ravel()
+    sigma_true = np.asarray(sigma_true, dtype=float).ravel()
     coverage_levels = list(coverage_levels)
 
     mu_star, sigma2_star = compute_predictive_aggregation(mu, sigma2)
+    sigma_star = np.sqrt(np.maximum(sigma2_star, 1e-12))
     rmse = float(np.sqrt(np.mean((y_test - mu_star) ** 2)))
-    crps = float(mixture_crps(y_test, mu, sigma2).mean())
-    nll = mixture_nll(y_test, mu, sigma2)
+
+    sig = np.sqrt(np.maximum(sigma2, 0.0))
+    crps = float(expected_crps_mixture_vs_gaussian(None, mu, sig, mu_true, sigma_true).mean())
+    nll = float(expected_nll_mixture_vs_gaussian(None, mu, sig, mu_true, sigma_true).mean())
+    nll_gaussian = float(expected_nll_gaussian_vs_gaussian(mu_star, sigma_star, mu_true, sigma_true).mean())
+
     pit = compute_pit(y_test, mu, sigma2)
 
     # Always include 0.05/0.95 so the fixed central-90% sharpness interval is available
@@ -338,7 +381,7 @@ def evaluate_mixture(x_test, y_test, mu, sigma2, coverage_levels: Iterable[float
     coverage = empirical_coverage(y_test, quantile_dict, coverage_levels)
     sharp = sharpness_stats(quantile_dict, sigma2_star)
 
-    scalar = {'rmse': rmse, 'crps': crps, 'nll': nll}
+    scalar = {'rmse': rmse, 'crps': crps, 'nll': nll, 'nll_gaussian': nll_gaussian}
     for a, c in coverage.items():
         scalar[f'coverage_{a}'] = c
     scalar.update(sharp)

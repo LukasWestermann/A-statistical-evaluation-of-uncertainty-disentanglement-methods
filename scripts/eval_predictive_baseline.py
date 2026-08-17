@@ -9,6 +9,12 @@ members -- no retraining -- plus an MC Dropout dropout-probability (p) sweep, wh
 DOES retrain once per (p, replicate) since p is a training hyperparameter.
 
 Trains every method FRESH -- does not load the existing results/*/outputs/*.npz files.
+Does, however, WRITE its own raw_outputs.npz per (method, DGP, seed) baseline cell, via
+utils.results_save.save_model_outputs -- same convention as
+ood/sample_size/undersampling/noise_level_experiments.py -- so metrics can be recomputed
+later without retraining. Not written for the component-count/dropout-p sweep replicates
+(those are cheap to regenerate from the baseline npz or a retrain, and saving one per
+sweep replicate would be a lot of near-duplicate files).
 Math lives in utils/mixture_metrics.py; this script just wires up training + I/O.
 
 Usage:
@@ -120,7 +126,8 @@ SIZE_SWEEP_GRID_ARG = {
 }
 
 
-def _component_size_sweep(method, mu_all, sigma2_all, grid, R, seed_base, dgp, x_test, y_test, args, extra_tags=None):
+def _component_size_sweep(method, mu_all, sigma2_all, grid, R, seed_base, dgp, x_test, y_test,
+                           mu_true, sigma_true, args, extra_tags=None):
     extra_tags = extra_tags or {}
     K = mu_all.shape[0]
     eff_grid = sorted({m for m in grid if m <= K})
@@ -129,7 +136,7 @@ def _component_size_sweep(method, mu_all, sigma2_all, grid, R, seed_base, dgp, x
     for M in eff_grid:
         sweep_seed = seed_base + M
         for r, idx, mu_sub, sigma2_sub in mm.subsample_members(mu_all, sigma2_all, M, R, seed=sweep_seed):
-            result = mm.evaluate_mixture(x_test, y_test, mu_sub, sigma2_sub,
+            result = mm.evaluate_mixture(x_test, y_test, mu_sub, sigma2_sub, mu_true, sigma_true,
                                           coverage_levels=args.coverage_levels, n_bins=args.n_bins,
                                           include_stratified=False)
             tags = dict(method=method, dgp=dgp, scenario='ensemble_size_sweep',
@@ -142,7 +149,7 @@ def _component_size_sweep(method, mu_all, sigma2_all, grid, R, seed_base, dgp, x
 # Unlike M, p is baked into the trained weights -- there is no way to get different-p
 # predictions out of one trained model, so this genuinely retrains once per (p, replicate).
 
-def run_mc_dropout_p_sweep(x_train, y_train, x_test, y_test, dgp, args):
+def run_mc_dropout_p_sweep(x_train, y_train, x_test, y_test, mu_true, sigma_true, dgp, args):
     print(f"-- MC_Dropout dropout-p sweep (grid={args.mc_dropout_p_grid}, R={args.mc_dropout_p_sweep_r}) --")
     rows = []
     for p in args.mc_dropout_p_grid:
@@ -159,7 +166,7 @@ def run_mc_dropout_p_sweep(x_train, y_train, x_test, y_test, dgp, args):
                 model, x_test, M=args.mc_dropout_m, return_raw_arrays=True)
             mu_s, sigma2_s = mm.normalize_mixture_arrays(mu_s, sigma2_s, n_expected=len(x_test))
 
-            result = mm.evaluate_mixture(x_test, y_test, mu_s, sigma2_s,
+            result = mm.evaluate_mixture(x_test, y_test, mu_s, sigma2_s, mu_true, sigma_true,
                                           coverage_levels=args.coverage_levels, n_bins=args.n_bins,
                                           include_stratified=False)
             tags = dict(method='MC_Dropout', dgp=dgp, scenario='mc_dropout_p_sweep',
@@ -170,7 +177,14 @@ def run_mc_dropout_p_sweep(x_train, y_train, x_test, y_test, dgp, args):
 
 # ============================== Per-DGP evaluation ==============================
 
-def run_dgp(func_type, noise_type, methods, args):
+RAW_OUTPUT_EXTRA_KWARGS = {
+    "MC_Dropout": lambda args: {"dropout_p": args.mc_dropout_p, "mc_samples": args.mc_dropout_m},
+    "Deep_Ensemble": lambda args: {"n_nets": args.ensemble_k},
+    "BAMLSS": lambda args: {},
+}
+
+
+def run_dgp(func_type, noise_type, methods, args, date, include_p_sweep=True):
     dgp = mm.dgp_name(func_type, noise_type)
     print(f"\n{'=' * 70}\nDGP: {dgp}\n{'=' * 70}")
 
@@ -181,7 +195,7 @@ def run_dgp(func_type, noise_type, methods, args):
     x_test, y_test, mu_true, sigma_true = mm.make_test_set(
         func_type, noise_type, x_range=tuple(args.train_range), n_test=args.n_test, test_seed=args.test_seed)
 
-    oracle = mm.oracle_metrics(y_test, mu_true, sigma_true)
+    oracle = mm.oracle_metrics(mu_true, sigma_true)
     scalar_rows += _scalar_rows(
         {'crps': oracle['oracle_crps'], 'nll': oracle['oracle_nll']},
         method='oracle', dgp=dgp, scenario='baseline', ensemble_size=None, replicate=0, seed=args.seed)
@@ -194,10 +208,21 @@ def run_dgp(func_type, noise_type, methods, args):
         mu_samples, sigma2_samples = mm.normalize_mixture_arrays(mu_samples, sigma2_samples, n_expected=len(x_test))
         raw_by_method[method] = (mu_samples, sigma2_samples)
 
+        # Persist the raw per-member predictions -- same save_model_outputs convention as
+        # the other experiment scripts -- so this baseline cell's mixture can be rescored
+        # later (new metrics, sanity checks) without retraining.
+        results_save_module.save_model_outputs(
+            mu_samples=mu_samples, sigma2_samples=sigma2_samples,
+            x_grid=x_test, y_grid_clean=mu_true,
+            x_train_subset=x_train, y_train_subset=y_train,
+            model_name=method, noise_type=noise_type, func_type=func_type,
+            subfolder='predictive_eval', seed=args.seed, date=date,
+            **RAW_OUTPUT_EXTRA_KWARGS[method](args))
+
         # MC_Dropout rows carry the dropout_p used, so the fixed-p baseline/size-sweep
         # rows are traceable alongside the varying-p sweep below (NaN for other methods).
         extra = {'dropout_p': args.mc_dropout_p} if method == 'MC_Dropout' else {}
-        result = mm.evaluate_mixture(x_test, y_test, mu_samples, sigma2_samples,
+        result = mm.evaluate_mixture(x_test, y_test, mu_samples, sigma2_samples, mu_true, sigma_true,
                                       coverage_levels=args.coverage_levels, n_bins=args.n_bins,
                                       include_stratified=True)
         tags = dict(method=method, dgp=dgp, scenario='baseline',
@@ -212,10 +237,17 @@ def run_dgp(func_type, noise_type, methods, args):
         grid = getattr(args, SIZE_SWEEP_GRID_ARG[method])
         extra = {'dropout_p': args.mc_dropout_p} if method == 'MC_Dropout' else {}
         scalar_rows += _component_size_sweep(method, mu_all, sigma2_all, grid, args.ensemble_size_r,
-                                              args.ensemble_size_seed, dgp, x_test, y_test, args, extra_tags=extra)
+                                              args.ensemble_size_seed, dgp, x_test, y_test,
+                                              mu_true, sigma_true, args, extra_tags=extra)
 
-    if 'MC_Dropout' in methods:
-        scalar_rows += run_mc_dropout_p_sweep(x_train, y_train, x_test, y_test, dgp, args)
+    if 'MC_Dropout' in methods and include_p_sweep:
+        # Genuinely retrains per (p, replicate) -- deliberately NOT repeated per outer seed
+        # (see main()'s seed loop) to avoid 5x'ing an already-expensive retraining sweep.
+        # Its own replicate variability comes from args.mc_dropout_p_sweep_seed + rep,
+        # independent of the outer seed loop's purpose (baseline/component-count
+        # seed-sensitivity). Documented limitation: the p-sweep's variability estimate is
+        # therefore seed-locked, not pooled across the 5 outer seeds like everything else.
+        scalar_rows += run_mc_dropout_p_sweep(x_train, y_train, x_test, y_test, mu_true, sigma_true, dgp, args)
 
     return scalar_rows, pit_rows, strat_rows
 
@@ -255,7 +287,16 @@ def build_arg_parser():
                     help="Shrink all model hyperparameters for a fast plumbing check "
                          "(not statistically meaningful).")
 
-    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--seed", type=int, default=42,
+                    help="Single training/model seed for a --scenario or default smoke run. "
+                         "Ignored (overridden by --seeds) under --batch.")
+    p.add_argument("--seeds", type=str, default=None,
+                    help="Comma-separated outer seeds to repeat the full sweep over, "
+                         "matching this repo's 5-seed replication convention used elsewhere "
+                         "(training/model seeding only -- --test-seed stays fixed across all "
+                         "of them, since the test set is deliberately seed-independent). "
+                         "Defaults to '42,43,44,45,46' under --batch, or just [--seed] "
+                         "otherwise, so quick manual/smoke invocations aren't silently 5x'd.")
     p.add_argument("--test-seed", type=int, default=20260809)
     p.add_argument("--n-train", type=int, default=1000)
     p.add_argument("--train-range", type=float, nargs=2, default=[-5, 10])
@@ -336,17 +377,32 @@ def main():
     args.mc_dropout_p_grid = [float(x) for x in args.mc_dropout_p_grid.split(",")]
     args.bamlss_nsamples_grid = [int(x) for x in args.bamlss_nsamples_grid.split(",")]
 
+    # 5-seed replication, matching this repo's convention elsewhere -- default only kicks in
+    # for --batch, so a quick --scenario/smoke invocation isn't silently 5x'd. --test-seed
+    # stays a single fixed value across every outer seed (the test set is deliberately
+    # seed-independent, see mm.make_test_set's docstring).
+    if args.seeds is not None:
+        seeds = [int(s) for s in args.seeds.split(",")]
+    elif args.batch:
+        seeds = [42, 43, 44, 45, 46]
+    else:
+        seeds = [args.seed]
+
     out_root = args.out_root or (project_root / "results" / "predictive_eval")
     results_save_module.plots_dir = out_root / "plots"
     pio.csv_dir = out_root / "csv"
     date = datetime.now().strftime('%Y%m%d')
 
     all_scalar, all_pit, all_strat = [], [], []
-    for func_type, noise_type in dgps:
-        scalar_rows, pit_rows, strat_rows = run_dgp(func_type, noise_type, methods, args)
-        all_scalar += scalar_rows
-        all_pit += pit_rows
-        all_strat += strat_rows
+    for i, seed in enumerate(seeds):
+        args.seed = seed
+        print(f"\n{'#' * 70}\nOuter seed {seed} ({i + 1}/{len(seeds)})\n{'#' * 70}")
+        for func_type, noise_type in dgps:
+            scalar_rows, pit_rows, strat_rows = run_dgp(func_type, noise_type, methods, args, date,
+                                                          include_p_sweep=(i == 0))
+            all_scalar += scalar_rows
+            all_pit += pit_rows
+            all_strat += strat_rows
 
     scalar_df = pd.DataFrame(all_scalar)
     pit_df = pd.DataFrame(all_pit)

@@ -638,12 +638,16 @@ def save_summary_text(text, filename, subfolder=''):
     print(f"Saved summary: {filepath}")
     return filepath
 
-def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list, 
-                           avg_tot_norm_list, correlation_list, function_name, 
+def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
+                           avg_tot_norm_list, correlation_list, function_name,
                            noise_type='heteroscedastic', func_type='', model_name='',
                            mse_list=None, date=None, dropout_p=None, mc_samples=None, n_nets=None,
                            nll_list=None, crps_list=None,
                            spearman_aleatoric_list=None, spearman_epistemic_list=None,
+                           oracle_crps_list=None, oracle_nll_list=None,
+                           iqd_list=None, kl_list=None,
+                           kl_mean_list=None, kl_spread_list=None,
+                           nll_gaussian_list=None, crps_gaussian_list=None,
                            save_individual=True):
     """Helper function to save summary statistics and create summary plot
     
@@ -681,13 +685,22 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
         stats_dict['MSE'] = mse_list
     
     # Always add new metrics columns (use provided values or None)
-    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * len(percentages)
-    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * len(percentages)
-    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * len(percentages)
-    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * len(percentages)
-    
+    n = len(percentages)
+    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * n
+    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * n
+    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * n
+    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * n
+    stats_dict['Oracle_CRPS'] = oracle_crps_list if oracle_crps_list is not None else [None] * n
+    stats_dict['Oracle_NLL'] = oracle_nll_list if oracle_nll_list is not None else [None] * n
+    stats_dict['IQD'] = iqd_list if iqd_list is not None else [None] * n
+    stats_dict['KL'] = kl_list if kl_list is not None else [None] * n
+    stats_dict['KL_mean'] = kl_mean_list if kl_mean_list is not None else [None] * n
+    stats_dict['KL_spread'] = kl_spread_list if kl_spread_list is not None else [None] * n
+    stats_dict['NLL_gaussian'] = nll_gaussian_list if nll_gaussian_list is not None else [None] * n
+    stats_dict['CRPS_gaussian'] = crps_gaussian_list if crps_gaussian_list is not None else [None] * n
+
     stats_df = pd.DataFrame(stats_dict)
-    
+
     # Build filename with optional date and model parameters
     base_filename = f"uncertainties_summary_{function_name}_{noise_type}"
     
@@ -782,13 +795,17 @@ def save_summary_statistics(percentages, avg_ale_norm_list, avg_epi_norm_list,
     
     return stats_df, fig
 
-def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_norm_list, 
+def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_norm_list,
                                        avg_tot_norm_list, correlation_list, mse_list,
                                        function_name, distribution='normal',
                                        noise_type='heteroscedastic', func_type='', model_name='',
                                        date=None, dropout_p=None, mc_samples=None, n_nets=None,
                                        nll_list=None, crps_list=None,
                                        spearman_aleatoric_list=None, spearman_epistemic_list=None,
+                                       oracle_crps_list=None, oracle_nll_list=None,
+                                       iqd_list=None, kl_list=None,
+                                       kl_mean_list=None, kl_spread_list=None,
+                                       nll_gaussian_list=None, crps_gaussian_list=None,
                                        save_individual=True):
     """Helper function to save summary statistics and create summary plot for noise level experiments
     
@@ -825,11 +842,20 @@ def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_n
     }
     
     # Always add new metrics columns (use provided values or None)
-    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * len(tau_values)
-    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * len(tau_values)
-    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * len(tau_values)
-    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * len(tau_values)
-    
+    n = len(tau_values)
+    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * n
+    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * n
+    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * n
+    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * n
+    stats_dict['Oracle_CRPS'] = oracle_crps_list if oracle_crps_list is not None else [None] * n
+    stats_dict['Oracle_NLL'] = oracle_nll_list if oracle_nll_list is not None else [None] * n
+    stats_dict['IQD'] = iqd_list if iqd_list is not None else [None] * n
+    stats_dict['KL'] = kl_list if kl_list is not None else [None] * n
+    stats_dict['KL_mean'] = kl_mean_list if kl_mean_list is not None else [None] * n
+    stats_dict['KL_spread'] = kl_spread_list if kl_spread_list is not None else [None] * n
+    stats_dict['NLL_gaussian'] = nll_gaussian_list if nll_gaussian_list is not None else [None] * n
+    stats_dict['CRPS_gaussian'] = crps_gaussian_list if crps_gaussian_list is not None else [None] * n
+
     stats_df = pd.DataFrame(stats_dict)
     
     # Build filename with optional date and model parameters
@@ -917,16 +943,20 @@ def save_summary_statistics_noise_level(tau_values, avg_ale_norm_list, avg_epi_n
     
     return stats_df, fig
 
-def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list, 
+def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list,
                                 avg_tot_norm_list, correlation_list, mse_list,
-                                function_name, noise_type='heteroscedastic', 
+                                function_name, noise_type='heteroscedastic',
                                 func_type='', model_name='', region_type='ID',
                                 date=None, dropout_p=None, mc_samples=None, n_nets=None,
                                 nll_list=None, crps_list=None,
                                 spearman_aleatoric_list=None, spearman_epistemic_list=None,
+                                oracle_crps_list=None, oracle_nll_list=None,
+                                iqd_list=None, kl_list=None,
+                                kl_mean_list=None, kl_spread_list=None,
+                                nll_gaussian_list=None, crps_gaussian_list=None,
                                 save_individual=True):
     """Helper function to save summary statistics for OOD experiments
-    
+
     Args:
         avg_ale_norm_list: List of normalized average aleatoric uncertainties
         avg_epi_norm_list: List of normalized average epistemic uncertainties
@@ -942,12 +972,19 @@ def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list,
         dropout_p: Optional dropout probability for MC Dropout (float)
         mc_samples: Optional number of MC samples for MC Dropout (int)
         n_nets: Optional number of nets for Deep Ensemble (int)
-        nll_list: Optional list of NLL values
-        crps_list: Optional list of CRPS values
+        nll_list: Optional list of NLL values (primary -- full-mixture, exact-expected)
+        crps_list: Optional list of CRPS values (primary -- full-mixture, exact-expected)
         spearman_aleatoric_list: Optional list of Spearman correlations (aleatoric)
         spearman_epistemic_list: Optional list of Spearman correlations (epistemic)
+        oracle_crps_list, oracle_nll_list: Optional exact CRPS/NLL floor under the true DGP
+        iqd_list: Optional excess CRPS over the oracle floor
+        kl_list: Optional excess NLL over the oracle floor (Gaussian-forecast KL divergence)
+        kl_mean_list, kl_spread_list: Optional KL divergence split into mean-shift and
+            spread-mismatch components (see utils/analytic_scores.py)
+        nll_gaussian_list, crps_gaussian_list: Optional secondary moment-matched-Gaussian
+            scores, labeled separately from the primary mixture-based nll_list/crps_list
         save_individual: If True, save individual Excel file. If False, only return DataFrame.
-    
+
     Returns:
         tuple: (stats_df, None) - DataFrame with statistics (plots removed, only uncertainty plots with data points are displayed)
     """
@@ -959,13 +996,22 @@ def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list,
         'Correlation_Epi_Ale': correlation_list,
         'MSE': mse_list
     }
-    
+
     # Always add new metrics columns (use provided values or None)
-    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * len(avg_ale_norm_list)
-    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * len(avg_ale_norm_list)
-    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * len(avg_ale_norm_list)
-    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * len(avg_ale_norm_list)
-    
+    n = len(avg_ale_norm_list)
+    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * n
+    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * n
+    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * n
+    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * n
+    stats_dict['Oracle_CRPS'] = oracle_crps_list if oracle_crps_list is not None else [None] * n
+    stats_dict['Oracle_NLL'] = oracle_nll_list if oracle_nll_list is not None else [None] * n
+    stats_dict['IQD'] = iqd_list if iqd_list is not None else [None] * n
+    stats_dict['KL'] = kl_list if kl_list is not None else [None] * n
+    stats_dict['KL_mean'] = kl_mean_list if kl_mean_list is not None else [None] * n
+    stats_dict['KL_spread'] = kl_spread_list if kl_spread_list is not None else [None] * n
+    stats_dict['NLL_gaussian'] = nll_gaussian_list if nll_gaussian_list is not None else [None] * n
+    stats_dict['CRPS_gaussian'] = crps_gaussian_list if crps_gaussian_list is not None else [None] * n
+
     stats_df = pd.DataFrame(stats_dict)
     
     # Build filename with optional date and model parameters
@@ -1007,14 +1053,18 @@ def save_summary_statistics_ood(avg_ale_norm_list, avg_epi_norm_list,
     
     return stats_df, None
 
-def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list, 
+def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list,
                                          avg_tot_norm_list, correlation_list, mse_list,
-                                         function_name, noise_type='heteroscedastic', 
+                                         function_name, noise_type='heteroscedastic',
                                          func_type='', model_name='', region_name='Region',
                                          date=None, dropout_p=None, mc_samples=None, n_nets=None,
                                          density_factor=None,
                                          nll_list=None, crps_list=None,
                                          spearman_aleatoric_list=None, spearman_epistemic_list=None,
+                                         oracle_crps_list=None, oracle_nll_list=None,
+                                         iqd_list=None, kl_list=None,
+                                         kl_mean_list=None, kl_spread_list=None,
+                                         nll_gaussian_list=None, crps_gaussian_list=None,
                                          save_individual=True):
     """Helper function to save summary statistics and create summary plot for undersampling experiments
     
@@ -1049,11 +1099,20 @@ def save_summary_statistics_undersampling(avg_ale_norm_list, avg_epi_norm_list,
     }
     
     # Always add new metrics columns (use provided values or None)
-    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * len(avg_ale_norm_list)
-    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * len(avg_ale_norm_list)
-    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * len(avg_ale_norm_list)
-    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * len(avg_ale_norm_list)
-    
+    n = len(avg_ale_norm_list)
+    stats_dict['NLL'] = nll_list if nll_list is not None else [None] * n
+    stats_dict['CRPS'] = crps_list if crps_list is not None else [None] * n
+    stats_dict['Spearman_Aleatoric'] = spearman_aleatoric_list if spearman_aleatoric_list is not None else [None] * n
+    stats_dict['Spearman_Epistemic'] = spearman_epistemic_list if spearman_epistemic_list is not None else [None] * n
+    stats_dict['Oracle_CRPS'] = oracle_crps_list if oracle_crps_list is not None else [None] * n
+    stats_dict['Oracle_NLL'] = oracle_nll_list if oracle_nll_list is not None else [None] * n
+    stats_dict['IQD'] = iqd_list if iqd_list is not None else [None] * n
+    stats_dict['KL'] = kl_list if kl_list is not None else [None] * n
+    stats_dict['KL_mean'] = kl_mean_list if kl_mean_list is not None else [None] * n
+    stats_dict['KL_spread'] = kl_spread_list if kl_spread_list is not None else [None] * n
+    stats_dict['NLL_gaussian'] = nll_gaussian_list if nll_gaussian_list is not None else [None] * n
+    stats_dict['CRPS_gaussian'] = crps_gaussian_list if crps_gaussian_list is not None else [None] * n
+
     stats_df = pd.DataFrame(stats_dict)
     
     # Build filename with optional date and model parameters
