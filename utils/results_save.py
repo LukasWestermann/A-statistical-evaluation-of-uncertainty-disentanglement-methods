@@ -1572,7 +1572,7 @@ def save_model_outputs(mu_samples, sigma2_samples, x_grid, y_grid_clean,
                       x_train_subset=None, y_train_subset=None,
                       model_name='', noise_type='heteroscedastic', func_type='',
                       subfolder='', pct=None, tau=None, distribution=None,
-                      dropout_p=None, mc_samples=None, n_nets=None,
+                      dropout_p=None, mc_samples=None, n_nets=None, nsamples=None,
                       seed=None, date=None, **kwargs):
     """
     Save raw model outputs (mu_samples, sigma2_samples) to compressed numpy file.
@@ -1596,6 +1596,9 @@ def save_model_outputs(mu_samples, sigma2_samples, x_grid, y_grid_clean,
         dropout_p: Dropout probability for MC Dropout (optional)
         mc_samples: Number of MC samples for MC Dropout (optional)
         n_nets: Number of nets for Deep Ensemble (optional)
+        nsamples: Number of posterior draws for BAMLSS (optional). Included in the
+            filename, without which every value of a BAMLSS nsamples sweep would
+            write to the same path -- **kwargs reach the metadata but never the name.
         seed: Optional replicate seed -- when given, included in both the filename
             (so multiple seed-replicate runs of the same cell don't overwrite each
             other) and the saved metadata. None (default) reproduces today's
@@ -1665,7 +1668,10 @@ def save_model_outputs(mu_samples, sigma2_samples, x_grid, y_grid_clean,
         elif model_name == 'Deep_Ensemble':
             if n_nets is not None:
                 filename_parts.append(f"K{n_nets}")
-    
+        elif model_name == 'BAMLSS':
+            if nsamples is not None:
+                filename_parts.append(f"S{nsamples}")
+
     if pct is not None:
         filename_parts.append(f"pct{pct}")
     if tau is not None:
@@ -1726,6 +1732,8 @@ def save_model_outputs(mu_samples, sigma2_samples, x_grid, y_grid_clean,
         save_dict['mc_samples'] = np.array([mc_samples], dtype=np.int32)
     if n_nets is not None:
         save_dict['n_nets'] = np.array([n_nets], dtype=np.int32)
+    if nsamples is not None:
+        save_dict['nsamples'] = np.array([nsamples], dtype=np.int32)
     if date:
         save_dict['date'] = np.array([date], dtype=object)
     

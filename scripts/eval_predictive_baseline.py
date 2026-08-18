@@ -4,17 +4,28 @@ mixture NLL, PIT, marginal + stratified coverage, sharpness, and an oracle floor
 the true DGP -- for MC Dropout, Deep Ensemble, and BAMLSS on the BASELINE scenario
 (100% of training data, standard noise settings) across the 4 canonical toy-regression
 DGPs. Also runs, for each method, a component-count sensitivity sweep (Deep Ensemble's
-K, MC Dropout's M, BAMLSS's nsamples) by subsampling the already-trained/predicted
-members -- no retraining -- plus an MC Dropout dropout-probability (p) sweep, which
-DOES retrain once per (p, replicate) since p is a training hyperparameter.
+K, MC Dropout's M, BAMLSS's nsamples) plus an MC Dropout dropout-probability (p) sweep.
+
+REPLICATION DESIGN: the outer seed loop is the ONLY replicate axis. Every sweep runs one
+independently-seeded cell per (grid value, seed), on EVERY seed, so each grid value ends
+up with exactly 5 independent metric values -- report them as mean +/- std across seeds
+(utils/predictive_eval_aggregate.py::seed_mean_std). There is no separate within-seed
+replicate count and no sweep-only seed. What each sweep costs per cell differs, but the
+statistical treatment does not:
+  - Deep Ensemble K and MC Dropout p are training hyperparameters -> genuine retrain.
+  - MC Dropout M is prediction-time only -> a fresh set of M stochastic forward passes
+    from that seed's baseline-trained model.
+  - BAMLSS nsamples needs no re-fit: with the default n_iter/burnin/thin the baseline
+    cell already extracts the entire posterior chain, so a random row-subset of it is
+    exactly a uniform random subset of the chain. One MCMC fit per seed, as before.
 
 Trains every method FRESH -- does not load the existing results/*/outputs/*.npz files.
-Does, however, WRITE its own raw_outputs.npz per (method, DGP, seed) baseline cell, via
-utils.results_save.save_model_outputs -- same convention as
-ood/sample_size/undersampling/noise_level_experiments.py -- so metrics can be recomputed
-later without retraining. Not written for the component-count/dropout-p sweep replicates
-(those are cheap to regenerate from the baseline npz or a retrain, and saving one per
-sweep replicate would be a lot of near-duplicate files).
+Does, however, WRITE its own raw_outputs.npz for EVERY (method, grid value, seed, DGP)
+cell via utils.results_save.save_model_outputs -- same convention as
+ood/sample_size/undersampling/noise_level_experiments.py -- so any cell can be rescored
+later without redoing its training. Files are separated by a per-scenario subfolder plus
+the per-method grid token (K / M / S), since save_model_outputs gates filename tokens on
+model_name and would otherwise silently overwrite.
 Math lives in utils/mixture_metrics.py; this script just wires up training + I/O.
 
 Usage:
@@ -51,33 +62,37 @@ ALL_DGPS = [("linear", "homoscedastic"), ("linear", "heteroscedastic"),
 
 
 # ============================== Train-and-predict, one per method ==============================
-# Each returns raw (mu_samples, sigma2_samples) at x_test, shape [M, N_test]. Reseeds the
-# global np/torch RNG right before training -- correctness-critical for reproducibility
-# regardless of run order, since dropout masks, DataLoader shuffling, and Deep Ensemble's
-# own per-member seeding all touch global RNG state.
+# Each returns (mu_samples, sigma2_samples, artifact): raw predictions at x_test with
+# shape [M, N_test], plus the trained object the sweeps reuse (the MC Dropout model; None
+# where there is nothing to reuse). Reseeds the global np/torch RNG right before training
+# -- correctness-critical for reproducibility regardless of run order, since dropout
+# masks and DataLoader shuffling both draw from global RNG state -- and passes `seed`
+# explicitly into Deep Ensemble and BAMLSS, whose own RNGs are NOT reachable from the
+# global streams (Deep Ensemble reseeds torch itself per member; BAMLSS runs in R).
 
-def _train_predict_mc_dropout(x_train, y_train, x_test, seed, args):
+def _train_predict_mc_dropout(x_train, y_train, x_test, seed, args, p=None):
     np.random.seed(seed)
     torch.manual_seed(seed)
     ds = TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train))
     loader = DataLoader(ds, batch_size=args.mc_dropout_batch_size, shuffle=True)
-    model = MCDropoutRegressor(p=args.mc_dropout_p)
+    model = MCDropoutRegressor(p=args.mc_dropout_p if p is None else p)
     train_model(model, loader, epochs=args.mc_dropout_epochs, lr=args.mc_dropout_lr,
                 loss_type='beta_nll', beta=args.mc_dropout_beta)
     _, _, _, _, (mu_samples, sigma2_samples) = mc_dropout_predict(
         model, x_test, M=args.mc_dropout_m, return_raw_arrays=True)
-    return mu_samples, sigma2_samples
+    return mu_samples, sigma2_samples, model
 
 
-def _train_predict_deep_ensemble(x_train, y_train, x_test, seed, args):
+def _train_predict_deep_ensemble(x_train, y_train, x_test, seed, args, K=None):
     np.random.seed(seed)
     torch.manual_seed(seed)
     ensemble = train_ensemble_deep(x_train, y_train, batch_size=args.ensemble_batch_size,
-                                    K=args.ensemble_k, loss_type='beta_nll',
-                                    beta=args.ensemble_beta, epochs=args.ensemble_epochs)
+                                    K=args.ensemble_k if K is None else K,
+                                    loss_type='beta_nll', beta=args.ensemble_beta,
+                                    epochs=args.ensemble_epochs, seed=seed)
     _, _, _, _, (mu_samples, sigma2_samples) = ensemble_predict_deep(
         ensemble, x_test, return_raw_arrays=True)
-    return mu_samples, sigma2_samples
+    return mu_samples, sigma2_samples, ensemble
 
 
 def _train_predict_bamlss(x_train, y_train, x_test, seed, args):
@@ -85,8 +100,9 @@ def _train_predict_bamlss(x_train, y_train, x_test, seed, args):
     torch.manual_seed(seed)
     _, _, _, _, (mu_samples, sigma2_samples) = bamlss_predict(
         x_train, y_train, x_test, n_iter=args.bamlss_n_iter, burnin=args.bamlss_burnin,
-        thin=args.bamlss_thin, nsamples=args.bamlss_nsamples, return_raw_arrays=True)
-    return mu_samples, sigma2_samples
+        thin=args.bamlss_thin, nsamples=args.bamlss_nsamples, seed=seed,
+        return_raw_arrays=True)
+    return mu_samples, sigma2_samples, None
 
 
 TRAIN_PREDICT_FNS = {
@@ -111,80 +127,150 @@ def _stratified_rows(strat_list, **tags):
     return [dict(**row, **tags) for row in strat_list]
 
 
-# ============================== Component-count sweeps (no retraining) ==============================
-# Deep Ensemble's K members, MC Dropout's M forward passes, and BAMLSS's nsamples
-# posterior draws are all, at heart, "how many mixture components did we use" -- so one
-# subsample_members-based sweep covers all three: fit/train once at the max size (already
-# done for the baseline row), then evaluate nested random subsets of the SAME already-
-# computed raw predictions. No retraining for any of the three.
+# ============================== npz persistence ==============================
+# Every (method, grid value, seed, DGP) cell writes its own raw_outputs.npz, so any
+# cell can be rescored later without redoing its training. Disambiguation is two-layered
+# because save_model_outputs gates its filename tokens on model_name:
+#   - the scenario subfolder separates baseline from the sweeps. Without it MC Dropout's
+#     baseline (p0.25, M100) would collide with the M-sweep's M=100 cell AND the
+#     p-sweep's p=0.25 cell, all three being the same filename.
+#   - the per-method token (p/M, K, S) separates grid values within a scenario.
+# Subfolders mirror the `scenario` column of the tidy CSV one-for-one.
 
-# Per-method grid of component counts to sweep, keyed by the args attribute holding it.
-SIZE_SWEEP_GRID_ARG = {
-    "Deep_Ensemble": "ensemble_size_grid",
-    "MC_Dropout": "mc_dropout_m_grid",
-    "BAMLSS": "bamlss_nsamples_grid",
+SCENARIO_SUBFOLDER = {
+    'baseline': 'baseline',
+    'ensemble_size_sweep': 'ensemble_size_sweep',
+    'mc_dropout_p_sweep': 'mc_dropout_p_sweep',
+}
+
+# Tokens identifying the baseline cell of each method, mirrored by the per-grid-value
+# tokens the sweeps pass. BAMLSS's `nsamples` reaches the filename only because
+# save_model_outputs was extended with an S{nsamples} token -- **kwargs never do.
+BASELINE_TOKENS = {
+    "MC_Dropout": lambda args: {"dropout_p": args.mc_dropout_p, "mc_samples": args.mc_dropout_m},
+    "Deep_Ensemble": lambda args: {"n_nets": args.ensemble_k},
+    "BAMLSS": lambda args: {"nsamples": args.bamlss_nsamples},
 }
 
 
-def _component_size_sweep(method, mu_all, sigma2_all, grid, R, seed_base, dgp, x_test, y_test,
-                           mu_true, sigma_true, args, extra_tags=None):
-    extra_tags = extra_tags or {}
-    K = mu_all.shape[0]
-    eff_grid = sorted({m for m in grid if m <= K})
-    print(f"-- {method} component-size sweep (pool={K}, grid={eff_grid}, R={R}) --")
+def _save_cell(scenario, method, mu_s, sigma2_s, x_test, mu_true, x_train, y_train,
+               func_type, noise_type, args, date, **tokens):
+    return results_save_module.save_model_outputs(
+        mu_samples=mu_s, sigma2_samples=sigma2_s,
+        x_grid=x_test, y_grid_clean=mu_true,
+        x_train_subset=x_train, y_train_subset=y_train,
+        model_name=method, noise_type=noise_type, func_type=func_type,
+        subfolder=SCENARIO_SUBFOLDER[scenario], seed=args.seed, date=date,
+        scenario=scenario, **tokens)
+
+
+# ============================== Hyperparameter sweeps ==============================
+# The outer 5-seed loop in main() is the ONLY replicate axis: each sweep runs one
+# independently-seeded cell per (grid value, seed), on every seed, so a grid value ends
+# up with exactly 5 independent metric values and the reported spread is genuine
+# training/fit variability rather than subset-selection noise.
+
+def _score_and_tag(mu_s, sigma2_s, x_test, y_test, mu_true, sigma_true, args, **tags):
+    result = mm.evaluate_mixture(x_test, y_test, mu_s, sigma2_s, mu_true, sigma_true,
+                                  coverage_levels=args.coverage_levels, n_bins=args.n_bins,
+                                  include_stratified=False)
+    return _scalar_rows(result['scalar'], **tags)
+
+
+def run_ensemble_k_sweep(x_train, y_train, x_test, y_test, mu_true, sigma_true,
+                          dgp, func_type, noise_type, args, date):
+    """K is a training hyperparameter here: one fresh, independently-seeded ensemble per
+    (K, seed), rather than nested subsets drawn from a single K=20 pool."""
+    print(f"-- Deep_Ensemble K sweep (grid={args.ensemble_k_grid}, seed={args.seed}) --")
     rows = []
-    for M in eff_grid:
-        sweep_seed = seed_base + M
-        for r, idx, mu_sub, sigma2_sub in mm.subsample_members(mu_all, sigma2_all, M, R, seed=sweep_seed):
-            result = mm.evaluate_mixture(x_test, y_test, mu_sub, sigma2_sub, mu_true, sigma_true,
-                                          coverage_levels=args.coverage_levels, n_bins=args.n_bins,
-                                          include_stratified=False)
-            tags = dict(method=method, dgp=dgp, scenario='ensemble_size_sweep',
-                        ensemble_size=M, replicate=r, seed=sweep_seed, **extra_tags)
-            rows += _scalar_rows(result['scalar'], **tags)
+    for K in args.ensemble_k_grid:
+        mu_s, sigma2_s, _ = _train_predict_deep_ensemble(x_train, y_train, x_test,
+                                                          args.seed, args, K=K)
+        mu_s, sigma2_s = mm.normalize_mixture_arrays(mu_s, sigma2_s, n_expected=len(x_test))
+        _save_cell('ensemble_size_sweep', 'Deep_Ensemble', mu_s, sigma2_s, x_test, mu_true,
+                   x_train, y_train, func_type, noise_type, args, date, n_nets=K)
+        rows += _score_and_tag(mu_s, sigma2_s, x_test, y_test, mu_true, sigma_true, args,
+                               method='Deep_Ensemble', dgp=dgp, scenario='ensemble_size_sweep',
+                               ensemble_size=K, seed=args.seed)
     return rows
 
 
-# ============================== MC Dropout dropout-probability sweep (retrains) ==============
-# Unlike M, p is baked into the trained weights -- there is no way to get different-p
-# predictions out of one trained model, so this genuinely retrains once per (p, replicate).
+def run_mc_dropout_m_sweep(model, x_train, y_train, x_test, y_test, mu_true, sigma_true,
+                            dgp, func_type, noise_type, args, date):
+    """M is prediction-time only, so this reuses THIS seed's baseline-trained weights and
+    draws a fresh set of M stochastic forward passes per grid value. Deliberately not a
+    subset of the baseline's M=100 passes: nested cells would share noise, and the
+    forward passes are cheap enough that independence costs nothing."""
+    print(f"-- MC_Dropout M sweep (grid={args.mc_dropout_m_grid}, seed={args.seed}) --")
+    rows = []
+    for M in args.mc_dropout_m_grid:
+        # Strided so (seed, M) pairs cannot collide for any M < 10_000.
+        torch.manual_seed(10_000 * args.seed + M)
+        _, _, _, _, (mu_s, sigma2_s) = mc_dropout_predict(
+            model, x_test, M=M, return_raw_arrays=True)
+        mu_s, sigma2_s = mm.normalize_mixture_arrays(mu_s, sigma2_s, n_expected=len(x_test))
+        _save_cell('ensemble_size_sweep', 'MC_Dropout', mu_s, sigma2_s, x_test, mu_true,
+                   x_train, y_train, func_type, noise_type, args, date,
+                   dropout_p=args.mc_dropout_p, mc_samples=M)
+        rows += _score_and_tag(mu_s, sigma2_s, x_test, y_test, mu_true, sigma_true, args,
+                               method='MC_Dropout', dgp=dgp, scenario='ensemble_size_sweep',
+                               ensemble_size=M, seed=args.seed, dropout_p=args.mc_dropout_p)
+    return rows
 
-def run_mc_dropout_p_sweep(x_train, y_train, x_test, y_test, mu_true, sigma_true, dgp, args):
-    print(f"-- MC_Dropout dropout-p sweep (grid={args.mc_dropout_p_grid}, R={args.mc_dropout_p_sweep_r}) --")
+
+def run_bamlss_nsamples_sweep(mu_all, sigma2_all, x_train, y_train, x_test, y_test,
+                               mu_true, sigma_true, dgp, func_type, noise_type, args, date):
+    """One MCMC fit per seed (the baseline cell's) plus a Python row-subset per grid value.
+
+    This is equivalent to re-running the R-side sample() at zero extra cost: with the
+    defaults (n_iter=12000, burnin=2000, thin=10) the stored chain holds n_chain=1000
+    draws and the baseline's nsamples=1000 gives n_use = min(1000, 1000), so the baseline
+    extraction already returns the ENTIRE chain. A uniform random subset of those draws is
+    therefore exactly a uniform random subset of the full chain.
+    """
+    pool = mu_all.shape[0]
+    grid = sorted({s for s in args.bamlss_nsamples_grid if s <= pool})
+    dropped = sorted(set(args.bamlss_nsamples_grid) - set(grid))
+    if dropped:
+        print(f"   [warn] BAMLSS nsamples {dropped} exceed the {pool}-draw chain; skipped.")
+    print(f"-- BAMLSS nsamples sweep (pool={pool}, grid={grid}, seed={args.seed}) --")
+    rows = []
+    for S in grid:
+        # Strided so (seed, S) pairs cannot collide for any S < 100_000.
+        rng = np.random.default_rng(100_000 * args.seed + S)
+        idx = np.sort(rng.choice(pool, size=S, replace=False))
+        mu_s, sigma2_s = mu_all[idx], sigma2_all[idx]
+        _save_cell('ensemble_size_sweep', 'BAMLSS', mu_s, sigma2_s, x_test, mu_true,
+                   x_train, y_train, func_type, noise_type, args, date, nsamples=S)
+        rows += _score_and_tag(mu_s, sigma2_s, x_test, y_test, mu_true, sigma_true, args,
+                               method='BAMLSS', dgp=dgp, scenario='ensemble_size_sweep',
+                               ensemble_size=S, seed=args.seed)
+    return rows
+
+
+def run_mc_dropout_p_sweep(x_train, y_train, x_test, y_test, mu_true, sigma_true,
+                            dgp, func_type, noise_type, args, date):
+    """p is baked into the trained weights, so this genuinely retrains per (p, seed). It
+    now runs on EVERY outer seed -- the old design ran it only on the first, which left
+    its variability estimate seed-locked and incomparable with the other sweeps."""
+    print(f"-- MC_Dropout dropout-p sweep (grid={args.mc_dropout_p_grid}, seed={args.seed}) --")
     rows = []
     for p in args.mc_dropout_p_grid:
-        for rep in range(args.mc_dropout_p_sweep_r):
-            seed = args.mc_dropout_p_sweep_seed + rep
-            np.random.seed(seed)
-            torch.manual_seed(seed)
-            ds = TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train))
-            loader = DataLoader(ds, batch_size=args.mc_dropout_batch_size, shuffle=True)
-            model = MCDropoutRegressor(p=p)
-            train_model(model, loader, epochs=args.mc_dropout_epochs, lr=args.mc_dropout_lr,
-                        loss_type='beta_nll', beta=args.mc_dropout_beta)
-            _, _, _, _, (mu_s, sigma2_s) = mc_dropout_predict(
-                model, x_test, M=args.mc_dropout_m, return_raw_arrays=True)
-            mu_s, sigma2_s = mm.normalize_mixture_arrays(mu_s, sigma2_s, n_expected=len(x_test))
-
-            result = mm.evaluate_mixture(x_test, y_test, mu_s, sigma2_s, mu_true, sigma_true,
-                                          coverage_levels=args.coverage_levels, n_bins=args.n_bins,
-                                          include_stratified=False)
-            tags = dict(method='MC_Dropout', dgp=dgp, scenario='mc_dropout_p_sweep',
-                        ensemble_size=mu_s.shape[0], replicate=rep, seed=seed, dropout_p=p)
-            rows += _scalar_rows(result['scalar'], **tags)
+        mu_s, sigma2_s, _ = _train_predict_mc_dropout(x_train, y_train, x_test,
+                                                       args.seed, args, p=p)
+        mu_s, sigma2_s = mm.normalize_mixture_arrays(mu_s, sigma2_s, n_expected=len(x_test))
+        _save_cell('mc_dropout_p_sweep', 'MC_Dropout', mu_s, sigma2_s, x_test, mu_true,
+                   x_train, y_train, func_type, noise_type, args, date,
+                   dropout_p=p, mc_samples=args.mc_dropout_m)
+        rows += _score_and_tag(mu_s, sigma2_s, x_test, y_test, mu_true, sigma_true, args,
+                               method='MC_Dropout', dgp=dgp, scenario='mc_dropout_p_sweep',
+                               ensemble_size=mu_s.shape[0], seed=args.seed, dropout_p=p)
     return rows
 
 
 # ============================== Per-DGP evaluation ==============================
 
-RAW_OUTPUT_EXTRA_KWARGS = {
-    "MC_Dropout": lambda args: {"dropout_p": args.mc_dropout_p, "mc_samples": args.mc_dropout_m},
-    "Deep_Ensemble": lambda args: {"n_nets": args.ensemble_k},
-    "BAMLSS": lambda args: {},
-}
-
-
-def run_dgp(func_type, noise_type, methods, args, date, include_p_sweep=True):
+def run_dgp(func_type, noise_type, methods, args, date):
     dgp = mm.dgp_name(func_type, noise_type)
     print(f"\n{'=' * 70}\nDGP: {dgp}\n{'=' * 70}")
 
@@ -198,26 +284,23 @@ def run_dgp(func_type, noise_type, methods, args, date, include_p_sweep=True):
     oracle = mm.oracle_metrics(mu_true, sigma_true)
     scalar_rows += _scalar_rows(
         {'crps': oracle['oracle_crps'], 'nll': oracle['oracle_nll']},
-        method='oracle', dgp=dgp, scenario='baseline', ensemble_size=None, replicate=0, seed=args.seed)
+        method='oracle', dgp=dgp, scenario='baseline', ensemble_size=None, seed=args.seed)
 
-    raw_by_method = {}  # method -> full-size (mu_samples, sigma2_samples), for the sweeps below
+    # Pass 1: the baseline cell per method. Also produces what the sweeps reuse -- the
+    # trained MC Dropout model, and BAMLSS's full posterior chain.
+    raw_by_method, artifact_by_method = {}, {}
 
     for method in methods:
         print(f"-- {method} --")
-        mu_samples, sigma2_samples = TRAIN_PREDICT_FNS[method](x_train, y_train, x_test, args.seed, args)
+        mu_samples, sigma2_samples, artifact = TRAIN_PREDICT_FNS[method](
+            x_train, y_train, x_test, args.seed, args)
         mu_samples, sigma2_samples = mm.normalize_mixture_arrays(mu_samples, sigma2_samples, n_expected=len(x_test))
         raw_by_method[method] = (mu_samples, sigma2_samples)
+        artifact_by_method[method] = artifact
 
-        # Persist the raw per-member predictions -- same save_model_outputs convention as
-        # the other experiment scripts -- so this baseline cell's mixture can be rescored
-        # later (new metrics, sanity checks) without retraining.
-        results_save_module.save_model_outputs(
-            mu_samples=mu_samples, sigma2_samples=sigma2_samples,
-            x_grid=x_test, y_grid_clean=mu_true,
-            x_train_subset=x_train, y_train_subset=y_train,
-            model_name=method, noise_type=noise_type, func_type=func_type,
-            subfolder='predictive_eval', seed=args.seed, date=date,
-            **RAW_OUTPUT_EXTRA_KWARGS[method](args))
+        _save_cell('baseline', method, mu_samples, sigma2_samples, x_test, mu_true,
+                   x_train, y_train, func_type, noise_type, args, date,
+                   **BASELINE_TOKENS[method](args))
 
         # MC_Dropout rows carry the dropout_p used, so the fixed-p baseline/size-sweep
         # rows are traceable alongside the varying-p sweep below (NaN for other methods).
@@ -226,28 +309,28 @@ def run_dgp(func_type, noise_type, methods, args, date, include_p_sweep=True):
                                       coverage_levels=args.coverage_levels, n_bins=args.n_bins,
                                       include_stratified=True)
         tags = dict(method=method, dgp=dgp, scenario='baseline',
-                    ensemble_size=mu_samples.shape[0], replicate=0, seed=args.seed, **extra)
+                    ensemble_size=mu_samples.shape[0], seed=args.seed, **extra)
         scalar_rows += _scalar_rows(result['scalar'], **tags)
         pit_rows += _pit_rows(x_test, y_test, result['pit'], **tags)
         strat_rows += _stratified_rows(result['stratified'], **tags)
         print(f"   rmse={result['scalar']['rmse']:.4f}  crps={result['scalar']['crps']:.4f}  "
               f"nll={result['scalar']['nll']:.4f}  coverage_0.9={result['scalar']['coverage_0.9']:.3f}")
 
-    for method, (mu_all, sigma2_all) in raw_by_method.items():
-        grid = getattr(args, SIZE_SWEEP_GRID_ARG[method])
-        extra = {'dropout_p': args.mc_dropout_p} if method == 'MC_Dropout' else {}
-        scalar_rows += _component_size_sweep(method, mu_all, sigma2_all, grid, args.ensemble_size_r,
-                                              args.ensemble_size_seed, dgp, x_test, y_test,
-                                              mu_true, sigma_true, args, extra_tags=extra)
-
-    if 'MC_Dropout' in methods and include_p_sweep:
-        # Genuinely retrains per (p, replicate) -- deliberately NOT repeated per outer seed
-        # (see main()'s seed loop) to avoid 5x'ing an already-expensive retraining sweep.
-        # Its own replicate variability comes from args.mc_dropout_p_sweep_seed + rep,
-        # independent of the outer seed loop's purpose (baseline/component-count
-        # seed-sensitivity). Documented limitation: the p-sweep's variability estimate is
-        # therefore seed-locked, not pooled across the 5 outer seeds like everything else.
-        scalar_rows += run_mc_dropout_p_sweep(x_train, y_train, x_test, y_test, mu_true, sigma_true, dgp, args)
+    # Pass 2: the per-method sweeps, all at this seed.
+    if 'Deep_Ensemble' in methods:
+        scalar_rows += run_ensemble_k_sweep(x_train, y_train, x_test, y_test, mu_true,
+                                             sigma_true, dgp, func_type, noise_type, args, date)
+    if 'MC_Dropout' in methods:
+        scalar_rows += run_mc_dropout_m_sweep(artifact_by_method['MC_Dropout'], x_train, y_train,
+                                               x_test, y_test, mu_true, sigma_true, dgp,
+                                               func_type, noise_type, args, date)
+        scalar_rows += run_mc_dropout_p_sweep(x_train, y_train, x_test, y_test, mu_true,
+                                               sigma_true, dgp, func_type, noise_type, args, date)
+    if 'BAMLSS' in methods:
+        mu_all, sigma2_all = raw_by_method['BAMLSS']
+        scalar_rows += run_bamlss_nsamples_sweep(mu_all, sigma2_all, x_train, y_train, x_test,
+                                                  y_test, mu_true, sigma_true, dgp,
+                                                  func_type, noise_type, args, date)
 
     return scalar_rows, pit_rows, strat_rows
 
@@ -267,11 +350,9 @@ def apply_smoke_overrides(args):
     args.bamlss_burnin = 100
     args.bamlss_thin = 5
     args.bamlss_nsamples = 50
-    args.ensemble_size_r = 3
-    args.ensemble_size_grid = "2,3,5"
+    args.ensemble_k_grid = "2,3,5"
     args.mc_dropout_m_grid = "5,10,20"
     args.mc_dropout_p_grid = "0.25,0.5"
-    args.mc_dropout_p_sweep_r = 1
     args.bamlss_nsamples_grid = "10,25,50"
 
 
@@ -309,14 +390,12 @@ def build_arg_parser():
     p.add_argument("--mc-dropout-batch-size", type=int, default=32)
     p.add_argument("--mc-dropout-m", type=int, default=100)
     p.add_argument("--mc-dropout-m-grid", type=str, default="5,10,20,50,100",
-                    help="Component-count sweep for MC Dropout's M (prediction-time only, "
-                         "no retraining -- subsampled from the baseline M forward passes).")
+                    help="Component-count sweep for MC Dropout's M (prediction-time only, no "
+                         "retraining -- a fresh set of M forward passes per (M, seed) from "
+                         "that seed's baseline-trained model).")
     p.add_argument("--mc-dropout-p-grid", type=str, default="0.1,0.25,0.4,0.5",
                     help="Dropout-probability sweep. Unlike M, p is a training hyperparameter, "
-                         "so this retrains once per (p, replicate).")
-    p.add_argument("--mc-dropout-p-sweep-r", type=int, default=1,
-                    help="Retraining repeats per p value (>1 costs a full retrain each time).")
-    p.add_argument("--mc-dropout-p-sweep-seed", type=int, default=888)
+                         "so this retrains once per (p, seed), on every seed.")
 
     p.add_argument("--ensemble-k", type=int, default=20)
     p.add_argument("--ensemble-beta", type=float, default=0.5)
@@ -328,18 +407,16 @@ def build_arg_parser():
     p.add_argument("--bamlss-thin", type=int, default=10)
     p.add_argument("--bamlss-nsamples", type=int, default=1000)
     p.add_argument("--bamlss-nsamples-grid", type=str, default="10,50,100,250,500,1000",
-                    help="Component-count sweep for BAMLSS's nsamples (prediction-time only, "
-                         "no re-fitting -- subsampled from the baseline posterior draws).")
+                    help="Component-count sweep for BAMLSS's nsamples (no re-fitting -- a random "
+                         "row-subset of that seed's own full posterior chain, which the baseline "
+                         "cell already extracts in its entirety).")
 
     p.add_argument("--coverage-levels", type=str, default="0.5,0.8,0.9,0.95")
     p.add_argument("--n-bins", type=int, default=10)
 
-    p.add_argument("--ensemble-size-grid", type=str, default="2,3,5,10,20",
-                    help="Component-count sweep for Deep Ensemble's K.")
-    p.add_argument("--ensemble-size-r", type=int, default=20,
-                    help="Random-subset replicates, shared by all three component-count sweeps "
-                         "(Deep Ensemble K, MC Dropout M, BAMLSS nsamples).")
-    p.add_argument("--ensemble-size-seed", type=int, default=777)
+    p.add_argument("--ensemble-k-grid", type=str, default="2,3,5,10,20",
+                    help="Component-count sweep for Deep Ensemble's K. Each K is trained fresh "
+                         "per (K, seed) -- not subsampled from a single larger ensemble.")
 
     p.add_argument("--out-root", type=Path, default=None)
     p.add_argument("--figures", dest="figures", action="store_true", default=True)
@@ -372,7 +449,7 @@ def main():
             apply_smoke_overrides(args)
 
     args.coverage_levels = [float(x) for x in args.coverage_levels.split(",")]
-    args.ensemble_size_grid = [int(x) for x in args.ensemble_size_grid.split(",")]
+    args.ensemble_k_grid = [int(x) for x in args.ensemble_k_grid.split(",")]
     args.mc_dropout_m_grid = [int(x) for x in args.mc_dropout_m_grid.split(",")]
     args.mc_dropout_p_grid = [float(x) for x in args.mc_dropout_p_grid.split(",")]
     args.bamlss_nsamples_grid = [int(x) for x in args.bamlss_nsamples_grid.split(",")]
@@ -390,6 +467,10 @@ def main():
 
     out_root = args.out_root or (project_root / "results" / "predictive_eval")
     results_save_module.plots_dir = out_root / "plots"
+    # Set outputs_dir explicitly rather than letting save_model_outputs infer it from
+    # plots_dir on first call and cache it in a module global -- the inference is
+    # order-dependent and would leak across two --out-root values in one process.
+    results_save_module.outputs_dir = out_root / "outputs"
     pio.csv_dir = out_root / "csv"
     date = datetime.now().strftime('%Y%m%d')
 
@@ -398,8 +479,7 @@ def main():
         args.seed = seed
         print(f"\n{'#' * 70}\nOuter seed {seed} ({i + 1}/{len(seeds)})\n{'#' * 70}")
         for func_type, noise_type in dgps:
-            scalar_rows, pit_rows, strat_rows = run_dgp(func_type, noise_type, methods, args, date,
-                                                          include_p_sweep=(i == 0))
+            scalar_rows, pit_rows, strat_rows = run_dgp(func_type, noise_type, methods, args, date)
             all_scalar += scalar_rows
             all_pit += pit_rows
             all_strat += strat_rows

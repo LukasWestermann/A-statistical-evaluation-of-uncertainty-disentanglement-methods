@@ -17,6 +17,26 @@ from Models.MC_Dropout import gaussian_nll, beta_nll
 
 base_seed = 42
 
+# Stride between outer seeds, chosen far larger than any plausible K so that adjacent
+# seeds cannot share member streams. The naive `seed + 1000 + k` would give seed 42's
+# member 1 and seed 43's member 0 the identical seed 1043 -- across seeds 42..46 that
+# collapses most of the per-seed ensemble variability seed replication exists to measure.
+_SEED_STRIDE = 10_000
+
+
+def _member_seed(seed, k):
+    """Init/shuffle seed for ensemble member `k`.
+
+    `seed=None` reproduces the historical `base_seed + 1000 + k` stream byte-for-byte,
+    so every pre-existing caller -- and every raw_outputs.npz already on disk -- is
+    unaffected. An explicit seed switches to a strided stream that keeps nearby outer
+    seeds independent.
+    """
+    if seed is None:
+        return base_seed + 1000 + k
+    return int(seed) * _SEED_STRIDE + 1000 + k
+
+
 # ----- Baseline regression model (Appendix B) -----
 class BaselineRegressor(nn.Module):
     def __init__(self, input_dim=1):
@@ -49,7 +69,7 @@ class _BatchedEnsemble(nn.Module):
     single Adam optimizer over the stacked parameters is equivalent to K independent
     optimizers: Adam's moment estimates and updates are elementwise per parameter."""
 
-    def __init__(self, K, input_dim=1, hidden=32):
+    def __init__(self, K, input_dim=1, hidden=32, seed=None):
         super().__init__()
         self.K = K
         self.input_dim = input_dim
@@ -62,15 +82,16 @@ class _BatchedEnsemble(nn.Module):
         self.w_sigma = nn.Parameter(torch.empty(K, 1, hidden))
         self.b_sigma = nn.Parameter(torch.empty(K, 1))
         self.eps = 1e-6
-        self._init_members(input_dim, hidden)
+        self._init_members(input_dim, hidden, seed=seed)
 
-    def _init_members(self, input_dim, hidden):
+    def _init_members(self, input_dim, hidden, seed=None):
         # Build each member's layers with nn.Linear's own default init, seeded the
         # same way each ensemble member has always been seeded, so per-member
-        # initialization diversity matches training K separate models.
+        # initialization diversity matches training K separate models. See
+        # _member_seed for how an explicit `seed` decorrelates outer seed replicates.
         with torch.no_grad():
             for k in range(self.K):
-                torch.manual_seed(base_seed + 1000 + k)
+                torch.manual_seed(_member_seed(seed, k))
                 l1, l2 = nn.Linear(input_dim, hidden), nn.Linear(hidden, hidden)
                 lmu, lsig = nn.Linear(hidden, 1), nn.Linear(hidden, 1)
                 self.w1[k].copy_(l1.weight); self.b1[k].copy_(l1.bias)
@@ -102,7 +123,7 @@ class _BatchedEnsemble(nn.Module):
         return models
 
 # ----- Train an ensemble of K models -----
-def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', beta=0.5, parallel=True, epochs=500, input_dim=1):
+def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', beta=0.5, parallel=True, epochs=500, input_dim=1, seed=None):
     """
     Train an ensemble of K models.
 
@@ -121,6 +142,11 @@ def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', 
         loss_type: 'nll' or 'beta_nll'
         beta: Beta parameter for beta-NLL loss
         input_dim: Input dimension (1 for univariate, 2 for OVB with X and Z)
+        seed: Optional base seed for member initialization and per-member batch
+            order. Both were previously fixed to the module-level base_seed=42,
+            which made every ensemble bit-identical regardless of what the caller
+            seeded -- seed replicates need this to vary. None preserves the
+            historical behavior.
 
     Returns:
         List of trained models
@@ -132,13 +158,13 @@ def train_ensemble_deep(x_train, y_train, batch_size=32, K=30, loss_type='nll', 
     x_t = torch.from_numpy(x_train).to(device)
     y_t = torch.from_numpy(y_train).to(device)
 
-    ensemble = _BatchedEnsemble(K, input_dim=input_dim).to(device)
+    ensemble = _BatchedEnsemble(K, input_dim=input_dim, seed=seed).to(device)
     opt = optim.Adam(ensemble.parameters(), lr=1e-3)
 
     # Each member gets its own permutation stream, seeded the same way its
     # `torch.manual_seed(member_seed)` call used to be, so per-member batch order
     # stays independent across epochs instead of every member sharing one shuffle.
-    perm_generators = [torch.Generator().manual_seed(base_seed + 1000 + k) for k in range(K)]
+    perm_generators = [torch.Generator().manual_seed(_member_seed(seed, k)) for k in range(K)]
 
     for epoch in range(epochs):
         batch_indices = torch.stack([torch.randperm(N, generator=g) for g in perm_generators])  # [K, N]
