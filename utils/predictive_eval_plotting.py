@@ -7,6 +7,10 @@ plt.subplots(rows, cols, figsize=(6*cols, 4*rows), sharex=True, squeeze=False), 
 axes hidden via fig.delaxes) and reuses utils.results_save.save_plot so output PNGs
 match the rest of the repo (dpi=300, bbox_inches='tight'). Per-method colors reuse the
 existing model_colors convention from utils.dashboards.py.
+
+Dispersion on the two sweep figures is ACROSS SEEDS: the eval script runs exactly one
+independently-seeded cell per (grid value, seed), so each error bar is the mean +/- std
+over the 5 outer seeds and the dimmed points behind it are those individual seeds.
 """
 
 import math
@@ -14,6 +18,7 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 
+from utils.predictive_eval_aggregate import seed_mean_std
 from utils.results_save import save_plot
 
 METHOD_COLORS = {
@@ -106,12 +111,15 @@ def plot_crps_coverage_vs_ensemble_size(scalar_df, subfolder="predictive_eval/pl
     """All methods with a component-count sweep (scenario='ensemble_size_sweep' -- Deep
     Ensemble's K, MC Dropout's M, and BAMLSS's nsamples are all, at heart, 'how many
     mixture components did we use'). 2 stacked rows (CRPS, coverage_0.9) x facets=DGP.
-    Per facet: x=component count, one line per method with individual R-replicate points;
-    CRPS row gets the oracle CRPS as a dashed horizontal reference; coverage row gets a
-    dashed line at the nominal level (0.9) itself."""
+    Per facet: x=component count, one mean +/- std (across the outer seeds) errorbar line
+    per method with the individual per-seed points dimmed behind it; CRPS row gets the
+    oracle CRPS as a dashed horizontal reference; coverage row gets a dashed line at the
+    nominal level (0.9) itself."""
     sweep = scalar_df[scalar_df['scenario'] == 'ensemble_size_sweep']
     oracle = scalar_df[(scalar_df['method'] == 'oracle') & (scalar_df['metric'] == 'crps')]
-    dgps = sorted(scalar_df['dgp'].unique())
+    # From `sweep`, not the full frame: a DGP with no sweep rows would otherwise get an
+    # empty column pair.
+    dgps = sorted(sweep['dgp'].unique())
     methods = sorted(sweep['method'].unique())
 
     fig, axes = plt.subplots(2, len(dgps), figsize=(5 * len(dgps), 8), sharex='col', squeeze=False)
@@ -121,17 +129,18 @@ def plot_crps_coverage_vs_ensemble_size(scalar_df, subfolder="predictive_eval/pl
 
         for method in methods:
             color = _method_color(method)
-            crps_d = sweep[(sweep['dgp'] == dgp) & (sweep['metric'] == 'crps') & (sweep['method'] == method)]
-            ax_crps.scatter(crps_d['ensemble_size'], crps_d['value'], alpha=0.3, s=14, color=color)
-            if len(crps_d):
-                means = crps_d.groupby('ensemble_size')['value'].mean().sort_index()
-                ax_crps.plot(means.index, means.values, color=color, linewidth=2, marker='o', label=method)
-
-            cov_d = sweep[(sweep['dgp'] == dgp) & (sweep['metric'] == 'coverage_0.9') & (sweep['method'] == method)]
-            ax_cov.scatter(cov_d['ensemble_size'], cov_d['value'], alpha=0.3, s=14, color=color)
-            if len(cov_d):
-                means = cov_d.groupby('ensemble_size')['value'].mean().sort_index()
-                ax_cov.plot(means.index, means.values, color=color, linewidth=2, marker='o', label=method)
+            for ax, metric in ((ax_crps, 'crps'), (ax_cov, 'coverage_0.9')):
+                d = sweep[(sweep['dgp'] == dgp) & (sweep['metric'] == metric)
+                          & (sweep['method'] == method)]
+                if not len(d):
+                    continue
+                ax.scatter(d['ensemble_size'], d['value'], alpha=0.25, s=12,
+                           color=color, zorder=1)
+                agg = seed_mean_std(d, 'ensemble_size')
+                # std is NaN for a single-seed run; draw those as bare markers.
+                ax.errorbar(agg['ensemble_size'], agg['mean'], yerr=agg['std'].fillna(0.0),
+                            color=color, linewidth=2, marker='o', capsize=3,
+                            zorder=3, label=method)
 
         oracle_d = oracle[oracle['dgp'] == dgp]
         if len(oracle_d):
@@ -159,8 +168,9 @@ def plot_mc_dropout_p_sweep(scalar_df, subfolder="predictive_eval/plots",
                              filename="mc_dropout_p_sweep"):
     """MC Dropout only (dropout_p is a training hyperparameter, so this is a separate
     scenario from the component-count sweeps above). 2 stacked rows (CRPS, coverage_0.9)
-    x facets=DGP; x=dropout_p, individual replicate points + mean line, oracle CRPS /
-    nominal-0.9 dashed references as in plot_crps_coverage_vs_ensemble_size."""
+    x facets=DGP; x=dropout_p, per-seed points behind a mean +/- std (across seeds)
+    errorbar line, oracle CRPS / nominal-0.9 dashed references as in
+    plot_crps_coverage_vs_ensemble_size."""
     sweep = scalar_df[scalar_df['scenario'] == 'mc_dropout_p_sweep']
     oracle = scalar_df[(scalar_df['method'] == 'oracle') & (scalar_df['metric'] == 'crps')]
     dgps = sorted(sweep['dgp'].unique())
@@ -174,10 +184,12 @@ def plot_mc_dropout_p_sweep(scalar_df, subfolder="predictive_eval/plots",
         ax_crps, ax_cov = axes[0][col], axes[1][col]
 
         crps_d = sweep[(sweep['dgp'] == dgp) & (sweep['metric'] == 'crps')]
-        ax_crps.scatter(crps_d['dropout_p'], crps_d['value'], alpha=0.4, s=18, color=color)
+        ax_crps.scatter(crps_d['dropout_p'], crps_d['value'], alpha=0.3, s=16,
+                        color=color, zorder=1)
         if len(crps_d):
-            means = crps_d.groupby('dropout_p')['value'].mean().sort_index()
-            ax_crps.plot(means.index, means.values, color=color, linewidth=2, marker='o')
+            agg = seed_mean_std(crps_d, 'dropout_p')
+            ax_crps.errorbar(agg['dropout_p'], agg['mean'], yerr=agg['std'].fillna(0.0),
+                             color=color, linewidth=2, marker='o', capsize=3, zorder=3)
         oracle_d = oracle[oracle['dgp'] == dgp]
         if len(oracle_d):
             ax_crps.axhline(oracle_d['value'].iloc[0], linestyle='--', color=ORACLE_COLOR, label='Oracle CRPS')
@@ -187,10 +199,12 @@ def plot_mc_dropout_p_sweep(scalar_df, subfolder="predictive_eval/plots",
         ax_crps.grid(True, alpha=0.3)
 
         cov_d = sweep[(sweep['dgp'] == dgp) & (sweep['metric'] == 'coverage_0.9')]
-        ax_cov.scatter(cov_d['dropout_p'], cov_d['value'], alpha=0.4, s=18, color=color)
+        ax_cov.scatter(cov_d['dropout_p'], cov_d['value'], alpha=0.3, s=16,
+                       color=color, zorder=1)
         if len(cov_d):
-            means = cov_d.groupby('dropout_p')['value'].mean().sort_index()
-            ax_cov.plot(means.index, means.values, color=color, linewidth=2, marker='o')
+            agg = seed_mean_std(cov_d, 'dropout_p')
+            ax_cov.errorbar(agg['dropout_p'], agg['mean'], yerr=agg['std'].fillna(0.0),
+                            color=color, linewidth=2, marker='o', capsize=3, zorder=3)
         ax_cov.axhline(0.9, linestyle='--', color=ORACLE_COLOR, label='Nominal 0.9')
         ax_cov.set_xlabel("Dropout probability (p)")
         ax_cov.set_ylabel("Coverage @ 90%")

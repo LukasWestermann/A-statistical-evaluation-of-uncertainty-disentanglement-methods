@@ -93,8 +93,8 @@ def _reshape_bamlss_samples_to_n_by_s(arr, n_grid: int) -> np.ndarray:
     return flat.reshape(n_grid, s)
 
 
-def fit_bamlss(x_train, y_train, x_grid, n_iter=12000, burnin=2000, thin=10, 
-               nsamples=1000, k_mu=20, k_sigma=15, return_raw_arrays=False):
+def fit_bamlss(x_train, y_train, x_grid, n_iter=12000, burnin=2000, thin=10,
+               nsamples=1000, k_mu=20, k_sigma=15, return_raw_arrays=False, seed=None):
     """
     Fit Bayesian GAMLSS using bamlss package in R.
     
@@ -118,7 +118,12 @@ def fit_bamlss(x_train, y_train, x_grid, n_iter=12000, burnin=2000, thin=10,
         Basis dimension for mu smooth
     k_sigma : int
         Basis dimension for sigma smooth
-    
+    seed : int or None
+        Seed for R's RNG. Governs both the MCMC sampler and the `sample()` draw in
+        the posterior-extraction block below, so seed replicates are reproducible
+        and genuinely independent. None (default) leaves R's stream untouched,
+        preserving the behavior every existing caller has always seen.
+
     Returns:
     --------
     mu_pred : np.ndarray, shape (n_grid,)
@@ -162,6 +167,14 @@ def fit_bamlss(x_train, y_train, x_grid, n_iter=12000, burnin=2000, thin=10,
     )
     ''')
     
+    # One set.seed for the whole R-side call: it governs the MCMC sampler below AND the
+    # `sample(valid_idx, n_use)` posterior draw in the extraction block. Must be emitted
+    # before the fit -- seeding after it would leave the chain itself uncontrolled.
+    # Gated on `seed is not None` so every existing caller's R stream is untouched;
+    # int() because R's set.seed rejects floats.
+    if seed is not None:
+        ro.r(f'set.seed({int(seed)})')
+
     # Fit model
     print(f"Fitting BAMLSS model (this may take a while: {n_iter} iterations)...")
     ro.r(f'''
